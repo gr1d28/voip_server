@@ -1,11 +1,13 @@
 {application, voip_server, [
-    {description, "An OTP application"},
+    {description, "VoIP server application"},
     {vsn, "0.1.0"},
     {registered, []},
     {mod, {voip_server_app, []}},
     {applications, [
         kernel,
-        stdlib
+        stdlib,
+        mnesia,
+        nksip
     ]},
     {env, []},
     {modules, []},

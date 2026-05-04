@@ -1,0 +1,63 @@
+version: '3.8'
+
+services:
+  server-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: voip_server
+    container_name: server
+    environment:
+      - TZ=Asia/Novosibirsk
+    volumes:
+      - ~/.erlang.cookie:/root/.erlang.cookie:ro
+    restart: unless-stopped
+    networks:
+      server-network:
+        ipv4_address: 172.40.0.2
+    stdin_open: true
+    tty: true
+
+  # sipp-tester1:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.sipp
+  #   image: mysipp
+  #   container_name: sipp-tester1
+  #   environment:
+  #     - TZ=Asia/Novosibirsk
+  #   volumes:
+  #     - ./test:/test:ro
+  #   command: sipp -sf /test/message_test.xml -inf /test/test_data.csv -m 15 172.30.0.2:5060
+  #   working_dir: /
+  #   networks:
+  #     poll-network:
+  #       ipv4_address: 172.30.0.3
+  #   depends_on:
+  #     - poll-app
+
+  # sipp-tester2:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.sipp
+  #   image: mysipp
+  #   container_name: sipp-tester2
+  #   environment:
+  #     - TZ=Asia/Novosibirsk
+  #   volumes:
+  #     - ./test:/test:ro
+  #   command: sipp -sf /test/message_test.xml -inf /test/test_data.csv -r 20 -l 80 -m 500 172.30.0.2:5060
+  #   working_dir: /
+  #   networks:
+  #     poll-network:
+  #       ipv4_address: 172.30.0.4
+  #   depends_on:
+  #     - poll-app
+
+
+networks:
+  server-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.40.0.0/24

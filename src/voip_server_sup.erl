@@ -16,22 +16,20 @@
 start_link() ->
     supervisor:start_link({local, ?SERVER}, ?MODULE, []).
 
-%% sup_flags() = #{strategy => strategy(),         % optional
-%%                 intensity => non_neg_integer(), % optional
-%%                 period => pos_integer()}        % optional
-%% child_spec() = #{id => child_id(),       % mandatory
-%%                  start => mfargs(),      % mandatory
-%%                  restart => restart(),   % optional
-%%                  shutdown => shutdown(), % optional
-%%                  type => worker(),       % optional
-%%                  modules => modules()}   % optional
 init([]) ->
     SupFlags = #{
-        strategy => one_for_all,
-        intensity => 0,
-        period => 1
+        strategy => one_for_one,
+        intensity => 10,
+        period => 60
     },
-    ChildSpecs = [],
+    ChildSpecs = [
+        nksip:get_sup_spec(voip_server_uas, #{
+            plugins => [nksip_registrar],
+            sip_local_host => "0.0.0.0",
+            sip_listen => "sip:all:5060"
+        })
+    ],
+    io:format("voip_server_sup: SupFlags: ~p~nChildSpec: ~p~n", [SupFlags, ChildSpecs]),
     {ok, {SupFlags, ChildSpecs}}.
 
 %% internal functions

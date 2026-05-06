@@ -2,15 +2,21 @@ version: '3.8'
 
 services:
   server-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: voip_server
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
+    image: erlang:21
     container_name: server
+    working_dir: /app
     environment:
       - TZ=Asia/Novosibirsk
     volumes:
+      - ./src:/app/src
+      - ./include:/app/include
+      - ./rebar.config:/app/rebar.config
+      - ./scripts/run_server.sh:/app/scripts/run_server.sh
       - ~/.erlang.cookie:/root/.erlang.cookie:ro
+    command: bash /app/scripts/run_server.sh
     restart: unless-stopped
     networks:
       server-network:

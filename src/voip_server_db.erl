@@ -11,7 +11,8 @@
 -export([ensure_tables/0, table_info/0, clear_all/0]).
 
 -export([add_user/4, add_user/5, get_user/2, delete_user/2, list_users/0, update_user_status/3]).
--export([get_registrations/1, add_registration/2, delete_registration/1, count_registrations/1]).
+-export([get_registrations/1, get_registrations/2, add_registration/2, delete_registrations/1, clear_registrations/0, count_registrations/1]).
+-export([init_table_users/0]).
 % -export([add_registration/5, get_registrations/1, delete_registration/2, clear_registrations/0, count_registrations/1]).
 
 %%%===================================================================
@@ -218,9 +219,20 @@ add_registration(AOR, RegContact) ->
 get_registrations(AOR) ->
     mnesia:dirty_read({registrations, AOR}).
 
-%% @doc Удаление конкретной регистрации
--spec delete_registration(nksip:aor()) -> ok | {error, term()}.
-delete_registration(AOR) ->
+-spec get_registrations(binary(), binary()) -> [#registrations{}].
+get_registrations(UserName, Domain) ->
+    MatchSpec = [
+        {
+            #registrations{aor = {'$1', UserName, Domain}, _ = '_'},
+            [],
+            ['$_']
+        }
+    ],
+    mnesia:dirty_select(registrations, MatchSpec).
+
+%% @doc Удаление всех котактов регистрации по aor
+-spec delete_registrations(nksip:aor()) -> ok | {error, term()}.
+delete_registrations(AOR) ->
     Pattern = #registrations{aor = AOR, _ = '_'},
     F = fun() ->
         Registrations = mnesia:match_object(Pattern),
@@ -247,14 +259,14 @@ delete_registration(AOR) ->
 % %         {aborted, _} -> 0
 % %     end.
 
-% %% @doc Очистка всех регистраций
-% -spec clear_registrations() -> ok | {error, term()}.
-% clear_registrations() ->
-%     F = fun() -> mnesia:clear_table(registrations) end,
-%     case mnesia:transaction(F) of
-%         {atomic, ok} -> ok;
-%         {aborted, Reason} -> {error, Reason}
-%     end.
+%% @doc Очистка всех регистраций
+-spec clear_registrations() -> ok | {error, term()}.
+clear_registrations() ->
+    F = fun() -> mnesia:clear_table(registrations) end,
+    case mnesia:transaction(F) of
+        {atomic, ok} -> ok;
+        {aborted, Reason} -> {error, Reason}
+    end.
 
 %% @doc Количество регистраций для AOR
 -spec count_registrations(nksip:aor()) -> non_neg_integer().
@@ -299,6 +311,12 @@ table_opts(registrations) ->
 table_opts(dialplan) ->
     [{type, set}, {disc_copies, [node()]}, {record_name, dialplan},
      {attributes, record_info(fields, dialplan)}].
+
+init_table_users() ->
+    Hash1 = nksip_auth:make_ha1(<<"100">>, <<"1234">>, <<"172.40.0.2">>),
+    Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.2">>),
+    add_user(<<"100">>, <<"172.40.0.2">>, Hash1, active, <<"DisplayName">>),
+    add_user(<<"101">>, <<"172.40.0.2">>, Hash2, active, <<"DisplayName">>).
 
 %% @private Инициализация таблицы начальными данными
 % -spec init_table(atom()) -> ok.

@@ -11,9 +11,11 @@
 -export([ensure_tables/0, table_info/0, clear_all/0]).
 
 -export([add_user/4, add_user/5, get_user/2, delete_user/2, list_users/0, update_user_status/3]).
--export([get_registrations/1, get_registrations/2, add_registration/2, delete_registrations/1, clear_registrations/0, count_registrations/1]).
+-export([get_registrations/1, get_registrations/2, add_registration/2, delete_registrations/1, clear_registrations/0, count_registrations/1, count_all_registrations/0]).
+-export([add_call/1, get_call/1, delete_call/1, count_all_call/0]).
 -export([init_table_users/0]).
-% -export([add_registration/5, get_registrations/1, delete_registration/2, clear_registrations/0, count_registrations/1]).
+
+-export_type([participant_role/0]).
 
 %%%===================================================================
 %%% API functions
@@ -88,6 +90,12 @@ create_tables(Nodes) ->
             {record_name, registrations},
             {attributes, record_info(fields, registrations)}
         ]},
+        {call, [
+            {type, set},
+            {disc_copies, Nodes},
+            {record_name, call},
+            {attributes, record_info(fields, call)}
+        ]},
         {dialplan, [
             {type, set},
             {disc_copies, Nodes},
@@ -107,22 +115,20 @@ create_tables(Nodes) ->
 -spec ensure_tables() -> ok.
 ensure_tables() ->
     io:format("ensure table~n"),
-    Tables = [users, registrations, dialplan],
+    Tables = ?TABLES_NAME_LIST,
     lists:foreach(fun ensure_table/1, Tables).
 
 %% @doc Информация о таблицах
 -spec table_info() -> [{atom(), non_neg_integer(), non_neg_integer()}].
 table_info() ->
     [{Table, mnesia:table_info(Table, size), mnesia:table_info(Table, memory)}
-     || Table <- [users, registrations, dialplan], mnesia:table_info(Table, exists)].
+     || Table <- ?TABLES_NAME_LIST, mnesia:table_info(Table, exists)].
 
 %% @doc Очистка всех данных из таблиц
 -spec clear_all() -> ok | {error, term()}.
 clear_all() ->
     F = fun() ->
-        mnesia:delete_table(users),
-        mnesia:delete_table(registrations),
-        mnesia:delete_table(dialplan)
+        [mnesia:delete_table(TableName) || TableName <- ?TABLES_NAME_LIST]
     end,
     case mnesia:transaction(F) of
         {atomic, _} ->
@@ -168,7 +174,11 @@ get_user(Name, Domain) ->
 %% @doc Удаление пользователя
 -spec delete_user(binary(), binary()) -> ok | {error, term()}.
 delete_user(Name, Domain) ->
-    F = fun() -> mnesia:delete({users, {Name, Domain}}) end,
+    Pattern = #users{name = Name, domain = Domain, _ = '_'},
+    F = fun() ->
+        Users = mnesia:match_object(Pattern),
+        lists:foreach(fun(Object) -> mnesia:delete_object(Object) end, Users)
+    end,
     case mnesia:transaction(F) of
         {atomic, ok} -> ok;
         {aborted, Reason} -> {error, Reason}
@@ -243,22 +253,6 @@ delete_registrations(AOR) ->
         {aborted, Reason} -> {error, Reason}
     end.
 
-% %% @doc Удаление просроченных регистраций
-% % -spec delete_expired_registrations() -> non_neg_integer().
-% % delete_expired_registrations() ->
-% %     Now = os:timestamp(),
-% %     Pattern = #registrations{_ = '_'},
-% %     F = fun() ->
-% %         Regs = mnesia:match_object(Pattern),
-% %         Expired = [Reg || Reg <- Regs, is_expired(Reg#registrations.expires, Now)],
-% %         lists:foreach(fun(Reg) -> mnesia:delete_object(Reg) end, Expired),
-% %         length(Expired)
-% %     end,
-% %     case mnesia:transaction(F) of
-% %         {atomic, Count} -> Count;
-% %         {aborted, _} -> 0
-% %     end.
-
 %% @doc Очистка всех регистраций
 -spec clear_registrations() -> ok | {error, term()}.
 clear_registrations() ->
@@ -272,6 +266,38 @@ clear_registrations() ->
 -spec count_registrations(nksip:aor()) -> non_neg_integer().
 count_registrations(AOR) ->
     length(get_registrations(AOR)).
+
+-spec count_all_registrations() -> non_neg_integer().
+count_all_registrations() ->
+    length(mnesia:dirty_match_object(registrations, #registrations{_ = '_'})).
+
+%%%===================================================================
+%%% Call operations
+%%%===================================================================
+
+-spec add_call(#call{}) -> ok | {error, term()}.
+add_call(Call) ->
+    F = fun() -> mnesia:write(Call) end,
+    case mnesia:transaction(F) of
+        {atomic, ok} -> ok;
+        {aborted, Reason} -> {error, Reason}
+    end.
+
+-spec get_call(nksip:call_id()) -> [#call{}].
+get_call(CallId) ->
+    mnesia:dirty_read({call, CallId}).
+
+-spec delete_call(nksip:call_id()) -> ok | {error, term()}.
+delete_call(CallId) ->
+    F = fun () -> mnesia:delete({call, CallId}) end,
+    case mnesia:transaction(F) of
+        {atomic, ok} -> ok;
+        {aborted, Reason} -> {error, Reason}
+    end.
+
+-spec count_all_call() -> non_neg_integer().
+count_all_call() ->
+    length(mnesia:dirty_match_object(call, #call{_ = '_'})). %% TODO добавить проверку результата во все подобные функции
 
 %%%===================================================================
 %%% Internal functions
@@ -302,12 +328,14 @@ ensure_table(Table) ->
 %% @private Параметры таблиц по умолчанию
 -spec table_opts(atom()) -> [tuple()].
 table_opts(users) ->
-    io:format("record users: ~p~n", [record_info(fields, users)]),
     [{type, set}, {disc_copies, [node()]}, {record_name, users},
      {attributes, record_info(fields, users)}];
 table_opts(registrations) ->
     [{type, bag}, {disc_copies, [node()]}, {record_name, registrations},
      {attributes, record_info(fields, registrations)}];
+table_opts(call) ->
+    [{type, set}, {disc_copies, [node()]}, {record_name, call},
+     {attributes, record_info(fields, call)}];
 table_opts(dialplan) ->
     [{type, set}, {disc_copies, [node()]}, {record_name, dialplan},
      {attributes, record_info(fields, dialplan)}].
@@ -317,39 +345,3 @@ init_table_users() ->
     Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.2">>),
     add_user(<<"100">>, <<"172.40.0.2">>, Hash1, active, <<"DisplayName">>),
     add_user(<<"101">>, <<"172.40.0.2">>, Hash2, active, <<"DisplayName">>).
-
-%% @private Инициализация таблицы начальными данными
-% -spec init_table(atom()) -> ok.
-% init_table(users) ->
-%     case mnesia:dirty_first(users) of
-%         '$end_of_table' ->
-%             TestUser = #users{
-%                 name = <<"100">>,
-%                 domain = <<"localhost">>,
-%                 password = <<"test123">>,  %% TODO: Захэшировать
-%                 display_name = <<"Test User">>,
-%                 status = active
-%             },
-%             mnesia:dirty_write(TestUser);
-%         _ -> ok
-%     end;
-% init_table(registrations) ->
-%     ok;
-% init_table(dialplan) ->
-%     case mnesia:dirty_first(dialplan) of
-%         '$end_of_table' ->
-%             TestRoute = #dialplan{
-%                 id = 1,
-%                 priority = 10,
-%                 math_pattern = <<"^\\d+$">>,
-%                 destination = <<"user:100">>
-%             },
-%             mnesia:dirty_write(TestRoute);
-%         _ -> ok
-%     end.
-
-%% @private Проверка просроченности регистрации
-% -spec is_expired(timestamp(), timestamp()) -> boolean().
-% is_expired(Expires, Now) ->
-%     ExpiresSec = Expires =:= undefined orelse
-%         timer:now_diff(Now, Expires) >= 0.

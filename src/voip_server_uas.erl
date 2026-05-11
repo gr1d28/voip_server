@@ -1,11 +1,14 @@
 -module(voip_server_uas).
 
 -export([sip_get_user_pass/4, sip_authorize/3, sip_route/5, sip_register/2, sip_invite/2, sip_ack/2, sip_cancel/2, sip_bye/2, sip_registrar_store/2]).
+-export([sip_dialog_update/3]).
 
+-include_lib("nksip/include/nksip.hrl").
 -include_lib("nklib/include/nklib.hrl").
 -include_lib("nksip/include/nksip_registrar.hrl").
 -include_lib("nkserver/include/nkserver_module.hrl").
 -include_lib("voip_server/include/voip_server_db.hrl").
+-include_lib("voip_server/include/voip_server_call_fsm.hrl").
 
 sip_get_user_pass(User, Domain, _Req, _Call) ->
     io:format("voip_server: sip_get_user_pass(~p, ~p)~n", [User, Domain]),
@@ -67,9 +70,10 @@ sip_invite(Req, Call) ->
 
     {ok, ReqId} = nksip_request:get_handle(Req),
 
-    io:format("voip_server: INVITE from ~s@~s to ~s@~s (Call-ID: ~s)~n", [FromUser, FromDomain, ToUser, ToDomain, CallId]),
+    {ok, InDialogId} = nksip_dialog:get_handle(Req),
+    io:format("voip_server: InDialogId = ~p~n", [InDialogId]),
 
-    io:format("voip_sever: ReqId = ~p~n", [ReqId]),
+    io:format("voip_server: INVITE from ~s@~s to ~s@~s (Call-ID: ~s)~n", [FromUser, FromDomain, ToUser, ToDomain, CallId]),
 
     case voip_server_db:get_user(ToUser, ToDomain) of
         {error, not_found} ->
@@ -81,17 +85,45 @@ sip_invite(Req, Call) ->
                     io:format("voip_server: User ~s@~s is not registered~n", [ToUser, ToDomain]),
                     {reply, 480};
                 Contacts when is_list(Contacts) ->
+                    AppId = nksip_call:srv_id(Call),
+                    CallId = nksip_call:call_id(Call),
                     %% TODO: сделать очередь по приоритетам дозвона
                     [#registrations{reg_contact = RegContact} | _Rest] = Contacts,
                     TargetUri = RegContact#reg_contact.contact,
 
                     FromHeader = nksip_sipmsg:get_meta(from, Req),
-                    [ContactHeader | _OtherContacts] = nksip_sipmsg:get_meta([<<"contact">>], Req), %% может вернуть несколько contact
+                    ToHeader = nksip_sipmsg:get_meta(to, Req),
                     Body = nksip_sipmsg:get_meta(body, Req),
-                    io:format("Original From = ~p~n Original Contact = ~p~n", [FromHeader, ContactHeader]),
-                    io:format("Body = ~p~n", [Body]),
+                    #uri{domain = ServerDomain, port = ServerPort} = nksip_sipmsg:get_meta(ruri, Req),
+                    ServerPort2 = case ServerPort of
+                        0 -> 5060;
+                        Int -> Int
+                    end,
 
-                    spawn(fun() -> b2bua_outgoing(Call, TargetUri, Body, ReqId, FromHeader, ContactHeader) end),
+                    InParticipantMap = #{
+                        ?USER_NAME      => FromUser,
+                        ?DOMAIN_NAME    => FromDomain,
+                        ?ROLE           => caller,
+                        ?REQUEST_HANDLE => ReqId,
+                        ?DIALOG_HANDLE  => InDialogId,
+                        ?SDP            => Body
+                    },
+                    OutParticipantMap = #{
+                        ?USER_NAME      => ToUser,
+                        ?DOMAIN_NAME    => ToDomain,
+                        ?ROLE           => callee
+                    },
+                    OutgoingInvite = #outgoing_invite{
+                        target_uri  = TargetUri,
+                        serv_id     = AppId,
+                        from        = FromHeader,
+                        to          = ToHeader,
+                        domain      = ServerDomain,
+                        port        = ServerPort
+                    },
+
+                    io:format("voip_server: Start call ~p~n", [CallId]),
+                    voip_server_call_fsm:start_link(CallId, [InParticipantMap, OutParticipantMap], OutgoingInvite),
 
                     noreply
             end
@@ -108,9 +140,12 @@ sip_cancel(Req, _Call) ->
     {forward}.
 
 sip_bye(Req, _Call) ->
-    CallId = nksip_sipmsg:get_meta(call_id, Req),
-    io:format("voip_server: BYE received for call ~s~n", [CallId]),
-    {reply, {200, []}}.
+    {ok, [{from_user, FromUser}, {from_domain, FromDomain}, {to_user, ToUser}, {call_id, CallId}, {to_domain, ToDomain}]} =
+        nksip_request:get_metas([from_user, from_domain, to_user, call_id, to_domain], Req),
+    {ok, ReqId} = nksip_request:get_handle(Req),
+    io:format("voip_server: BYE received for call ~p~n", [CallId]),
+    voip_server_call_fsm:bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}),
+    noreply.
 
 sip_registrar_store(AppId, {get, AOR} = StoreOp) ->
     io:format("sip_registrar_store ~p StoreOp: ~p~n", [AppId, StoreOp]),
@@ -143,44 +178,20 @@ sip_registrar_store(AppId, del_all = StoreOp) ->
             ok
     end.
 
-b2bua_outgoing(InDialog, TargetUri, Body, InReqId, OriginalFrom, OriginalContact) ->
-    AppId = nksip_call:srv_id(InDialog),
-    CallId = nksip_call:call_id(InDialog),
+sip_dialog_update({invite_status,{stop,cancelled}}, D, _Call) ->
+    io:format("voip_server: call sip_dialog_update~n"),
 
-    io:format("voip_server: Incoming Call-ID: ~p~n", [CallId]),
-    io:format("voip_server: Sending INVITE to ~p with SDP~n", [TargetUri]),
+    CallId = D#dialog.call_id,
+    io:format("voip_server: call_id = ~p~n", [CallId]),
 
-    Opts = [
-        {call_id, CallId},
-        {from, OriginalFrom},
-        {contact, OriginalContact},
-        {body, Body},
-        {get_meta, [body]},
-        auto_2xx_ack,
-        {timeout, 60000}
-    ],
+    #uri{user = FromUser, domain = FromDomain} = D#dialog.local_uri,
+    #uri{user = ToUser, domain = ToDomain} = D#dialog.remote_uri,
+    io:format("voip_server: stop dialog from ~p@~p to ~p@~p~n", [FromUser, FromDomain, ToUser, ToDomain]),
 
-    nksip_request:reply(ringing, InReqId),
-
-    case nksip_uac:invite(AppId, TargetUri, Opts) of
-        {ok, Code, OutDialogHandle} when Code >= 200 andalso Code < 300 ->
-            io:format("voip_server: Outgoing call answered immediately with ~p~n", [Code]),
-            io:format("OutDialogHandle = ~p~n", [OutDialogHandle]),
-            % {dialog, DialogHandle} = lists:keyfind(dialog, 1, OutDialogHandle),
-            RemoteBody = lists:keyfind(body, 1, OutDialogHandle),
-            io:format("voip_server: RemoteBody = ~p~n", [RemoteBody]),
-            {body, SDPStruct} = RemoteBody,
-            SDPBinary = nksip_sdp:unparse(SDPStruct),
-            nksip_request:reply({ok, [
-                {body, SDPBinary},
-                {contact, <<"sip:100@172.40.0.2:5060">>},
-                {content_type, <<"application/sdp">>}
-            ]}, InReqId),
-            ok;
-        {error, Reason} ->
-            io:format("voip_server: Failed to create outgoing call: ~p~n", [Reason]),
-            ok;
-        Answer ->
-            io:format("voip_server: Unexpected answer: ~p~n", [Answer]),
-            ok
-    end.
+    voip_server_call_fsm:cancel({CallId, FromUser, FromDomain, ToUser, ToDomain}),
+    ok;
+sip_dialog_update(DS, D, _Call) ->
+    io:format("voip_server: call sip_dialog_update~n"),
+    io:format("voip_server: DS = ~p~n", [DS]),
+    io:format("voip_server: call_id = ~p~n", [D#dialog.call_id]),
+    ok.

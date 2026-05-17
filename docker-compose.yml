@@ -2,9 +2,6 @@ version: '3.8'
 
 services:
   server-app:
-    # build:
-    #   context: .
-    #   dockerfile: Dockerfile
     image: erlang:21
     container_name: server
     working_dir: /app
@@ -13,9 +10,11 @@ services:
     volumes:
       - ./src:/app/src
       - ./include:/app/include
+      - ./config:/app/config
       - ./rebar.config:/app/rebar.config
       - ./scripts/run_server.sh:/app/scripts/run_server.sh
       - ~/.erlang.cookie:/root/.erlang.cookie:ro
+      - server_data:/app/data
     command: bash /app/scripts/run_server.sh
     restart: unless-stopped
     networks:
@@ -60,6 +59,8 @@ services:
   #   depends_on:
   #     - poll-app
 
+volumes:
+  server_data:
 
 networks:
   server-network:

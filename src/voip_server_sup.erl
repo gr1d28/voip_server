@@ -25,7 +25,7 @@ init([]) ->
     ChildSpecs = [
         nksip:get_sup_spec(voip_server_uas, #{
             plugins => [nksip_registrar],
-            sip_local_host => "0.0.0.0",
+            sip_local_host => "172.40.0.2",
             sip_listen => "sip:all:5060"
         })
     ],

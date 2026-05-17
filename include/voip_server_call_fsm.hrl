@@ -13,6 +13,7 @@
 -define(REQUEST_HANDLE, request_handle).
 -define(DIALOG_HANDLE, dialog_handle).
 -define(SDP, sdp).
+-define(INVITE_TIMEOUT, 30000).     %% 30 секунд
 
 -type participant_map() :: #{
     ?USER_NAME      => binary(),

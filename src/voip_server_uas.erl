@@ -1,6 +1,6 @@
 -module(voip_server_uas).
 
--export([sip_get_user_pass/4, sip_authorize/3, sip_route/5, sip_register/2, sip_invite/2, sip_ack/2, sip_cancel/2, sip_bye/2, sip_registrar_store/2]).
+-export([sip_get_user_pass/4, sip_authorize/3, sip_route/5, sip_register/2, sip_invite/2, sip_cancel/2, sip_bye/2, sip_registrar_store/2]).
 -export([sip_dialog_update/3]).
 
 -include_lib("nksip/include/nksip.hrl").
@@ -119,7 +119,7 @@ sip_invite(Req, Call) ->
                         from        = FromHeader,
                         to          = ToHeader,
                         domain      = ServerDomain,
-                        port        = ServerPort
+                        port        = ServerPort2
                     },
 
                     io:format("voip_server: Start call ~p~n", [CallId]),
@@ -128,11 +128,6 @@ sip_invite(Req, Call) ->
                     noreply
             end
     end.
-
-sip_ack(Req, _Call) ->
-    CallId = nksip_sipmsg:get_meta(call_id, Req),
-    io:format("voip_server: ACK received for call ~s~n", [CallId]),
-    {reply, ok}.
 
 sip_cancel(Req, _Call) ->
     {ok, [{call_id, CallId}]} = nksip_request:get_metas([call_id], Req),
@@ -186,9 +181,9 @@ sip_dialog_update({invite_status,{stop,cancelled}}, D, _Call) ->
 
     #uri{user = FromUser, domain = FromDomain} = D#dialog.local_uri,
     #uri{user = ToUser, domain = ToDomain} = D#dialog.remote_uri,
-    io:format("voip_server: stop dialog from ~p@~p to ~p@~p~n", [FromUser, FromDomain, ToUser, ToDomain]),
+    io:format("voip_server: stop dialog between ~p@~p and ~p@~p~n", [FromUser, FromDomain, ToUser, ToDomain]),
 
-    voip_server_call_fsm:cancel({CallId, FromUser, FromDomain, ToUser, ToDomain}),
+    voip_server_call_fsm:cancel(CallId),
     ok;
 sip_dialog_update(DS, D, _Call) ->
     io:format("voip_server: call sip_dialog_update~n"),

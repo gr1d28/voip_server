@@ -11,9 +11,7 @@
 
 start(_StartType, _StartArgs) ->
     case voip_server_db:start() of
-        ok ->
-            voip_server_db:init_table_users(),
-            ok;
+        ok -> ok;
         {error, Reason} ->
             io:format("Mnesia start error: ~p~n", [Reason]),
             exit(Reason)

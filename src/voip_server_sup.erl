@@ -23,6 +23,20 @@ init([]) ->
         period => 60
     },
     ChildSpecs = [
+        #{  id => voip_server_core,
+            start => {voip_server_core, start_link, []},
+            restart => permanent,
+            shutdown => 2000,
+            type => worker,
+            modules => [voip_server_core]
+        },
+        #{  id => voip_server_call_sup,
+            start => {voip_server_call_sup, start_link, []},
+            restart => permanent,
+            shutdown => 5000,
+            type => supervisor,
+            modules => [voip_server_call_sup]
+        },
         nksip:get_sup_spec(voip_server_uas, #{
             plugins => [nksip_registrar],
             sip_local_host => "172.40.0.2",

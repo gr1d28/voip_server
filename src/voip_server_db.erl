@@ -5,6 +5,8 @@
 
 -module(voip_server_db).
 
+-compile({parse_transform, ms_transform}).
+
 -include_lib("voip_server/include/voip_server_db.hrl").
 
 -export([start/0, stop/0, create_tables/0, create_tables/1]).
@@ -12,7 +14,7 @@
 
 -export([add_user/4, add_user/5, get_user/2, delete_user/2, list_users/0, update_user_status/3]).
 -export([get_registrations/1, get_registrations/2, add_registration/2, delete_registrations/1, clear_registrations/0, count_registrations/1, count_all_registrations/0]).
--export([add_call/1, get_call/1, delete_call/1, count_all_call/0]).
+-export([add_call/1, get_call/1, delete_call/1, get_all_map_CallId_FsmPid/0, count_all_call/0]).
 -export([init_table_users/0]).
 
 -export_type([participant_role/0]).
@@ -294,6 +296,15 @@ delete_call(CallId) ->
         {atomic, ok} -> ok;
         {aborted, Reason} -> {error, Reason}
     end.
+
+-spec get_all_map_CallId_FsmPid() -> [{nksip:call_id(), pid()}] | [].
+get_all_map_CallId_FsmPid() ->
+    %% Возвращаем все звонки, кроме завершенных
+    MatchSpec = ets:fun2ms(fun(#call{call_id = CallId, fsm_pid = FsmPid, state = State})
+                             when State /= terminated ->
+                                  {CallId, FsmPid}
+                           end),
+    mnesia:dirty_select(call, MatchSpec).
 
 -spec count_all_call() -> non_neg_integer().
 count_all_call() ->

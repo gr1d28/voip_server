@@ -21,16 +21,11 @@
 start_link(CallId, ParticipantList, OutgoingInvite) ->
     gen_statem:start_link(?MODULE, [CallId, ParticipantList, OutgoingInvite], []).
 
-cancel(CallId) ->
-    io:format("Send cast cancel~n"),
-    case voip_server_db:get_call(CallId) of
-        [] ->
-            io:format("The call has already stopped~n");
-        [Call] ->
-            gen_statem:cast(Call#call.fsm_pid, cancel)
-    end.
+-spec cancel(pid()) -> ok.
+cancel(FsmPid) ->
+    gen_statem:cast(FsmPid, cancel).
 
-%% TODO сделать получение в active из базы, а не из локального состояния
+-spec bye({nksip:call_id(), binary(), binary(), binary(), binary(), nksip:handle()}) -> ok.
 bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}) ->
     [Call] = voip_server_db:get_call(CallId),
     FromAOR = {sip, FromUser, FromDomain},
@@ -46,6 +41,7 @@ code_change(_OldVsn, State, Data, _Extra) ->
     io:format("call_fsm: code change~n"),
     {ok, State, Data}.
 
+%% TODO не удалять звонки, а переводить их в состояние terminated
 terminate(Reason, calling, {Call, _OutgoingInvite}) ->
     io:format("call_fsm: terminate calling with reason: ~p~n", [Reason]),
     voip_server_db:delete_call(Call#call.call_id),
@@ -68,7 +64,7 @@ init([CallId, ParticipantList, OutgoingInvite]) ->
         state = initializing,
         start_time = erlang:now()
     },
-    voip_server_db:add_call(CallRecord),    %% TODO добавить проверку, что звонок ещё не создан
+    voip_server_db:add_call(CallRecord),
     io:format("call_fsm: out init~n"),
     {ok, calling, {CallRecord, OutgoingInvite}, {next_event, internal, outgoing_invite}}.
 
@@ -87,12 +83,11 @@ calling(internal, outgoing_invite, {#call{participants = [Initiator, InvitedPart
     Opts = [
         async,
         {callback, FsmCallback},
-        {call_id, Call#call.call_id},
+        {call_id, Call#call.call_id},   %% Закомментить, чтобы создавался новый Call_id для поведения B2BUA
         {to, OriginalTo},
         {from, OriginalFrom},
         {contact, Contact},
-        {body, Initiator#participant.sdp},
-        {get_meta, [contacts, body]}
+        {body, Initiator#participant.sdp}
     ],
 
     io:format("call_fsm: Request Handle Initiator = ~p, Role = ~p~n", [Initiator#participant.request_handle, Initiator#participant.role]),
@@ -100,8 +95,8 @@ calling(internal, outgoing_invite, {#call{participants = [Initiator, InvitedPart
 
     {async, ReqId} = nksip_uac:invite(AppId, TargetUri, Opts),
     io:format("call_fsm: ReqId = ~p~n", [ReqId]),
-    NewInvitedParticipant = InvitedParticipant#participant{status = ringing, request_handle = ReqId},
-    NewCall = Call#call{participants = [Initiator, NewInvitedParticipant]},
+    NewInvitedParticipant = InvitedParticipant#participant{request_handle = ReqId},
+    NewCall = Call#call{participants = [Initiator, NewInvitedParticipant], state = initializing},
     {keep_state, {NewCall, OutgoingInvite}};
 %% Пришел 180 Ringing
 calling(info, {nksip_uac_reply, _FromPid, {resp, 180, Req, _C}}, {#call{participants = [Initiator, InvitedParticipant]} = Call, OutgoingInvite}) ->
@@ -148,6 +143,7 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{particip
             {next_state, active, NewCall};
         {error, Reason} ->
             io:format("call_fsm: error in send reply for initiator: ~p~n", [Reason]),
+            nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
             {stop, normal}
     end;
 %% Вызываемый абонент занят - завершаем звонок
@@ -236,7 +232,7 @@ make_participant_list([H | T], Acc) ->
     Role = maps:get(?ROLE, H),
     Status = case Role of
         caller -> inviting;
-        _ -> hold
+        _ -> idle
     end,
     ReqId = maps:get(?REQUEST_HANDLE, H, undefined),
     DialogId = maps:get(?DIALOG_HANDLE, H, undefined),

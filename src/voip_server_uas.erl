@@ -123,7 +123,7 @@ sip_invite(Req, Call) ->
                     },
 
                     io:format("voip_server: Start call ~p~n", [CallId]),
-                    voip_server_call_fsm:start_link(CallId, [InParticipantMap, OutParticipantMap], OutgoingInvite),
+                    voip_server_core:create_call({CallId, [InParticipantMap, OutParticipantMap], OutgoingInvite}),
 
                     noreply
             end
@@ -139,7 +139,7 @@ sip_bye(Req, _Call) ->
         nksip_request:get_metas([from_user, from_domain, to_user, call_id, to_domain], Req),
     {ok, ReqId} = nksip_request:get_handle(Req),
     io:format("voip_server: BYE received for call ~p~n", [CallId]),
-    voip_server_call_fsm:bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}),
+    voip_server_core:send_bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}),
     noreply.
 
 sip_registrar_store(AppId, {get, AOR} = StoreOp) ->
@@ -183,7 +183,7 @@ sip_dialog_update({invite_status,{stop,cancelled}}, D, _Call) ->
     #uri{user = ToUser, domain = ToDomain} = D#dialog.remote_uri,
     io:format("voip_server: stop dialog between ~p@~p and ~p@~p~n", [FromUser, FromDomain, ToUser, ToDomain]),
 
-    voip_server_call_fsm:cancel(CallId),
+    voip_server_core:send_cancel(CallId),
     ok;
 sip_dialog_update(DS, D, _Call) ->
     io:format("voip_server: call sip_dialog_update~n"),

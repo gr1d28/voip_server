@@ -44,5 +44,5 @@
 -type action()      :: user | redirect | proxy.
 -type timestamp() :: {MegaSecs :: non_neg_integer(), Secs :: non_neg_integer(), MicroSecs :: non_neg_integer()}.
 -type call_state() :: initializing | ringing | active | terminating | terminated.
--type participant_status() :: inviting | ringing | active | hold | terminated.
+-type participant_status() :: idle | inviting | ringing | active | hold | terminated.
 -type participant_role() :: caller | callee.

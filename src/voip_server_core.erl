@@ -51,9 +51,17 @@ handle_cast({add_call, CallId, ParticipantList, OutgoingInvite}, CallIdList) ->
                     io:format("core: error in starting call_fsm with call_id ~p: ~p~n", [CallId, Reason]),
                     {noreply, CallIdList}
             end;
-        {_, _FsmPid} ->
+        {_, FsmPid} ->
             io:format("core: call with call_id ~p has already started~n", [CallId]),
-            %% TODO обработка удержания/переадресации вызова
+            voip_server_call_fsm:re_invite(FsmPid, {ParticipantList, OutgoingInvite}),
+            % [InitiatorMap, InvitedMap] = ParticipantList,
+            % FromUser = maps:get(?USER_NAME, InitiatorMap),
+            % FromDomain = maps:get(?DOMAIN_NAME, InitiatorMap),
+            % ToUser = maps:get(?USER_NAME, InvitedMap),
+            % ToDomain = maps:get(?DOMAIN_NAME, InvitedMap),
+            % ReqId = maps:get(?REQUEST_HANDLE, InitiatorMap),
+
+            % voip_server_call_fsm:re_invite(FsmPid, {FromUser, FromDomain, ToUser, ToDomain, ReqId}),
             {noreply, CallIdList}
     end;
 handle_cast({bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}, CallIdList) ->
@@ -62,9 +70,9 @@ handle_cast({bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}, CallId
         false ->
             io:format("core: call with call_id ~p not exist~n", [CallId]),
             {noreply, CallIdList};
-        {_, _FsmPid} ->
+        {_, FsmPid} ->
             io:format("core: sending bye and stop call with call_id ~p~n", [CallId]),
-            voip_server_call_fsm:bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}),
+            voip_server_call_fsm:bye(FsmPid, {FromUser, FromDomain, ToUser, ToDomain, ReqId}),
             NewCallIdList = lists:keydelete(CallId, 1, CallIdList),
             {noreply, NewCallIdList}
     end;

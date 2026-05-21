@@ -13,7 +13,7 @@
 
 -export([start_link/3, stop/1]).
 -export([callback_mode/0, init/1, terminate/3, code_change/4]).
--export([bye/1, cancel/1]).
+-export([bye/2, cancel/1, re_invite/2]).
 -export([calling/3, active/3]).
 
 -spec start_link(nksip:call_id(), participant_list(), outgoing_invite()) ->
@@ -25,12 +25,18 @@ start_link(CallId, ParticipantList, OutgoingInvite) ->
 cancel(FsmPid) ->
     gen_statem:cast(FsmPid, cancel).
 
--spec bye({nksip:call_id(), binary(), binary(), binary(), binary(), nksip:handle()}) -> ok.
-bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}) ->
-    [Call] = voip_server_db:get_call(CallId),
+-spec bye(pid(), {binary(), binary(), binary(), binary(), nksip:handle()}) -> ok.
+bye(FsmPid, {FromUser, FromDomain, ToUser, ToDomain, ReqId}) ->
+    % [Call] = voip_server_db:get_call(CallId),
     FromAOR = {sip, FromUser, FromDomain},
     ToAOR = {sip, ToUser, ToDomain},
-    gen_statem:cast(Call#call.fsm_pid, {bye, FromAOR, ToAOR, ReqId}).
+    gen_statem:cast(FsmPid, {bye, FromAOR, ToAOR, ReqId}).
+
+re_invite(FsmPid, {ParticipantList, OutgoingInvite}) ->
+    % FromAOR = {sip, maps:get(?USER_NAME, InitiatorMap), maps:get(?DOMAIN_NAME, InitiatorMap)},
+    % ToAOR = {sip, maps:get(?USER_NAME, InvitedMap), maps:get(?DOMAIN_NAME, InvitedMap)},
+    ParticipantRecordList = make_participant_list(ParticipantList),
+    gen_statem:cast(FsmPid, {re_invite, ParticipantRecordList, OutgoingInvite}).
 
 stop(Pid) ->
     gen_statem:stop(Pid).
@@ -47,6 +53,12 @@ terminate(Reason, calling, {Call, _OutgoingInvite}) ->
     voip_server_db:delete_call(Call#call.call_id),
     io:format("call_fsm: call ~p deleted~n", [Call#call.call_id]),
     ok;
+terminate(_Reason, active, {Call, _OutgoingInvite}) ->
+    io:format("call_fsm: terminate active~n"),
+    CallId = Call#call.call_id,
+    voip_server_db:delete_call(CallId),
+    io:format("call_fsm: call ~p deleted~n", [CallId]),
+    ok;
 terminate(_Reason, active, Call) ->
     io:format("call_fsm: terminate active~n"),
     CallId = Call#call.call_id,
@@ -62,7 +74,7 @@ init([CallId, ParticipantList, OutgoingInvite]) ->
         fsm_pid = self(),
         participants = ParticipantRecordList,
         state = initializing,
-        start_time = erlang:now()
+        start_time = erlang:timestamp()
     },
     voip_server_db:add_call(CallRecord),
     io:format("call_fsm: out init~n"),
@@ -100,13 +112,16 @@ calling(internal, outgoing_invite, {#call{participants = [Initiator, InvitedPart
     {keep_state, {NewCall, OutgoingInvite}};
 %% Пришел 180 Ringing
 calling(info, {nksip_uac_reply, _FromPid, {resp, 180, Req, _C}}, {#call{participants = [Initiator, InvitedParticipant]} = Call, OutgoingInvite}) ->
+    %% TODO Сейчас тег передается правильно в 180 ringing, но нужно сделать правильную передачу в остальных методах
     io:format("call_fsm: calling 180 ringing~n"),
-    case nksip_request:reply(ringing, Initiator#participant.request_handle) of
+    To = nksip_sipmsg:get_meta(to, Req),
+    case nksip_request:reply({180, [{to, To}]}, Initiator#participant.request_handle) of
         ok -> ok;
         {error, Reason} -> io:format("call_fsm: error in reply initiator: ~p~n", [Reason])
     end,
     {ok, OutDialogId} = nksip_dialog:get_handle(Req),
     io:format("call_fsm: OutDialogId = ~p~n", [OutDialogId]),
+    io:format("call_fsm: To = ~p~n", [To]),
 
     NewInvitedParticipant = InvitedParticipant#participant{status = ringing, dialog_handle = OutDialogId},
     NewCall = Call#call{participants = [Initiator, NewInvitedParticipant], state = ringing},
@@ -125,8 +140,6 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{particip
     OriginalFrom = OutgoingInvite#outgoing_invite.from,
     OriginalTo = OutgoingInvite#outgoing_invite.to,
     Opts = [
-        {to, OriginalTo},
-        {from, OriginalFrom},
         {body, Body},
         {contact, Contact2}
     ],
@@ -150,7 +163,8 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{particip
 %% Отправляем busy вызывающему, вызываемому nksip сам отправит ACK
 calling(info, {nksip_uac_reply, _FromPid, {resp, 486, _Req, _C}}, {#call{participants = [Initiator, _InvitedParticipant]} = _Call, _OutgoingInvite}) ->
     io:format("call_fsm: 486 busy here~n"),
-    case nksip_request:reply(busy, Initiator#participant.request_handle) of
+    To = nksip_sipmsg:get_meta(to, _Req),
+    case nksip_request:reply({486, [{to, To}]}, Initiator#participant.request_handle) of
         ok -> ok;
         {error, Reason} -> io:format("call_fsm: error in reply initiator: ~p~n", [Reason])
     end,
@@ -165,7 +179,7 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 480, _Req, _C}}, {#call{partici
     end,
     {stop, normal};
 calling(info, Msg, {_Call, _OutgoingInvite}) ->
-    io:format("call_fsm: info msg = ~p~n", [Msg]),
+    io:format("call_fsm: calling info msg = ~p~n", [Msg]),
     {stop, normal};
 %% Шлём CANCEL в диалог вызываемого абонента, если пришёл от вызывающего, и завершаем звонок
 %% Вызывающему 200 OK отправит сам nksip
@@ -216,6 +230,87 @@ active(cast, {bye, FromAOR, ToAOR, ReqId}, Call) ->
             io:format("call_fsm: unexpected answer from nksip_uac:bye/2 ~p: ~p", [ToAOR, Answer]),
             {stop, normal}
     end;
+active(cast, {re_invite, [FromParticipant, _ToParticipant],
+#outgoing_invite{target_uri = TargetUri, from = OriginalFrom, to = OriginalTo, domain = ServerDomain, port = ServerPort} = OutgoingInvite},
+#call{participants = [Initiator, InvitedParticipant]} = Call) ->
+    io:format("call_fsm: active cast re_invite~n"),
+    io:format("call_fsm: TargetUri = ~p~n", [TargetUri]),
+
+    %% Абонент, от которого пришел Re-INVITE может быть инициатором или вызываемым
+    InitiatorAOR = Initiator#participant.id,
+    InvitedParticipantAOR = InvitedParticipant#participant.id,
+    NewParticipantList = case FromParticipant#participant.id of
+        InitiatorAOR ->
+            [
+                Initiator#participant{request_handle = FromParticipant#participant.request_handle, sdp = FromParticipant#participant.sdp},
+                InvitedParticipant
+            ];
+        InvitedParticipantAOR ->
+            [
+                InvitedParticipant#participant{request_handle = FromParticipant#participant.request_handle, sdp = FromParticipant#participant.sdp},
+                Initiator
+            ]
+    end,
+    [NewInitiator, NewInvitedParticipant] = NewParticipantList,
+
+    {sip, InitiatorName, _} = NewInitiator#participant.id,
+    Contact = TargetUri#uri{user = InitiatorName, domain = ServerDomain, port = ServerPort},
+
+    Self = self(),
+    FsmCallback = fun(Result) ->
+        Self ! {nksip_uac_reply, self(), Result}
+    end,
+
+    Opts = [
+        async,
+        {callback, FsmCallback},
+        {call_id, Call#call.call_id},
+        {contact, Contact},
+        {body, NewInitiator#participant.sdp}
+    ],
+
+    {async, ReqId} = nksip_uac:invite(NewInvitedParticipant#participant.dialog_handle, Opts),
+    io:format("call_fsm: ReqId = ~p~n", [ReqId]),
+
+    NewCall = Call#call{participants = [NewInitiator, NewInvitedParticipant]},
+    {keep_state, {NewCall, OutgoingInvite}};
+
+active(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{participants = [Initiator, InvitedParticipant]} = Call, OutgoingInvite}) ->
+    io:format("call_fsm: 200 OK~n"),
+    Body = nksip_sipmsg:get_meta(body, Req),
+    [Contact | _Other] = nksip_sipmsg:get_meta(contacts, Req),
+    io:format("call_fsm: body = ~p~n", [Body]),
+
+    Contact2 = Contact#uri{domain = OutgoingInvite#outgoing_invite.domain, port = OutgoingInvite#outgoing_invite.port},
+    io:format("call_fsm: Contact2 = ~p~n", [Contact2]),
+
+    OriginalFrom = OutgoingInvite#outgoing_invite.from,
+    OriginalTo = OutgoingInvite#outgoing_invite.to,
+    Opts = [
+        {body, Body},
+        {contact, Contact2}
+    ],
+    io:format("call_fsm: OriginalFrom = ~p OriginalTo = ~p~n", [OriginalFrom, OriginalTo]),
+
+    case nksip_request:reply({ok, Opts}, Initiator#participant.request_handle) of
+        ok ->
+            nksip_uac:ack(InvitedParticipant#participant.dialog_handle, []),        %% TODO обработать
+            io:format("call_fsm: successful connection of subscribers ~p and ~p~n", [Initiator#participant.id, InvitedParticipant#participant.id]),
+            NewInvitedParticipant = InvitedParticipant#participant{status = hold, request_handle = undefined, sdp = Body},
+            NewInitiator = Initiator#participant{status = active, request_handle = undefined},
+
+            NewCall = Call#call{participants = [NewInitiator, NewInvitedParticipant]},
+            {next_state, active, NewCall};
+        {error, Reason} ->
+            io:format("call_fsm: error in send reply for initiator: ~p~n", [Reason]),
+            nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
+            {stop, normal}
+    end;
+
+active(info, Msg, {_Call, _OutgoingInvite}) ->
+    io:format("call_fsm: active info msg = ~p~n", [Msg]),
+    {stop, normal};
+
 active(EventType, EventContent, Data) ->
     io:format("call_fsm: Unexpected event ~p: ~p~n", [EventType, EventContent]),
     {keep_state, Data}.

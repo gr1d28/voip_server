@@ -35,3 +35,13 @@ graph TD;
     Core -.Dynamic.-> Call_FSM1;
     Core -.Dynamic.-> Call_FSM2;
 ```
+
+<!-- https://mermaid.js.org/syntax/sequenceDiagram.html -->
+
+```mermaid
+flowchart LR
+    SIP-server --> Core;
+    Database@{shape: cyl, label: "Database"} --> Core;
+    Core --> Call_FSM;
+    Call_FSM --> Database
+```

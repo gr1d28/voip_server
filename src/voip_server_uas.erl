@@ -68,64 +68,70 @@ sip_invite(Req, Call) ->
     {ok, [{from_user, FromUser}, {from_domain, FromDomain}, {to_user, ToUser}, {call_id, CallId}, {to_domain, ToDomain}]} =
         nksip_request:get_metas([from_user, from_domain, to_user, call_id, to_domain], Req),
 
-    {ok, ReqId} = nksip_request:get_handle(Req),
+    case voip_server_db:get_registrations(FromUser, FromDomain) of
+        [] ->
+            io:format("voip_server: User ~s@~s is not registered~n", [FromUser, FromDomain]),
+            {reply, 480};
+        _ ->
+            {ok, ReqId} = nksip_request:get_handle(Req),
 
-    {ok, InDialogId} = nksip_dialog:get_handle(Req),
-    io:format("voip_server: InDialogId = ~p~n", [InDialogId]),
+            {ok, InDialogId} = nksip_dialog:get_handle(Req),
+            io:format("voip_server: InDialogId = ~p~n", [InDialogId]),
 
-    io:format("voip_server: INVITE from ~s@~s to ~s@~s (Call-ID: ~s)~n", [FromUser, FromDomain, ToUser, ToDomain, CallId]),
+            io:format("voip_server: INVITE from ~s@~s to ~s@~s (Call-ID: ~s)~n", [FromUser, FromDomain, ToUser, ToDomain, CallId]),
 
-    case voip_server_db:get_user(ToUser, ToDomain) of
-        {error, not_found} ->
-            io:format("voip_server: User ~s@~s not found~n", [ToUser, ToDomain]),
-            {reply, 404};
-        {ok, _ToUserRec} ->
-            case voip_server_db:get_registrations(ToUser, ToDomain) of
-                [] ->
-                    io:format("voip_server: User ~s@~s is not registered~n", [ToUser, ToDomain]),
-                    {reply, 480};
-                Contacts when is_list(Contacts) ->
-                    AppId = nksip_call:srv_id(Call),
-                    CallId = nksip_call:call_id(Call),
-                    %% TODO: сделать очередь по приоритетам дозвона
-                    [#registrations{reg_contact = RegContact} | _Rest] = Contacts,
-                    TargetUri = RegContact#reg_contact.contact,
+            case voip_server_db:get_user(ToUser, ToDomain) of
+                {error, not_found} ->
+                    io:format("voip_server: User ~s@~s not found~n", [ToUser, ToDomain]),
+                    {reply, 404};
+                {ok, _ToUserRec} ->
+                    case voip_server_db:get_registrations(ToUser, ToDomain) of
+                        [] ->
+                            io:format("voip_server: User ~s@~s is not registered~n", [ToUser, ToDomain]),
+                            {reply, 480};
+                        Contacts when is_list(Contacts) ->
+                            AppId = nksip_call:srv_id(Call),
+                            CallId = nksip_call:call_id(Call),
+                            %% TODO: сделать очередь по приоритетам дозвона
+                            [#registrations{reg_contact = RegContact} | _Rest] = Contacts,
+                            TargetUri = RegContact#reg_contact.contact,
 
-                    FromHeader = nksip_sipmsg:get_meta(from, Req),
-                    ToHeader = nksip_sipmsg:get_meta(to, Req),
-                    Body = nksip_sipmsg:get_meta(body, Req),
-                    #uri{domain = ServerDomain, port = ServerPort} = nksip_sipmsg:get_meta(ruri, Req),
-                    ServerPort2 = case ServerPort of
-                        0 -> 5060;
-                        Int -> Int
-                    end,
+                            FromHeader = nksip_sipmsg:get_meta(from, Req),
+                            ToHeader = nksip_sipmsg:get_meta(to, Req),
+                            Body = nksip_sipmsg:get_meta(body, Req),
+                            #uri{domain = ServerDomain, port = ServerPort} = nksip_sipmsg:get_meta(ruri, Req),
+                            ServerPort2 = case ServerPort of
+                                0 -> 5060;
+                                Int -> Int
+                            end,
 
-                    InParticipantMap = #{
-                        ?USER_NAME      => FromUser,
-                        ?DOMAIN_NAME    => FromDomain,
-                        ?ROLE           => caller,
-                        ?REQUEST_HANDLE => ReqId,
-                        ?DIALOG_HANDLE  => InDialogId,
-                        ?SDP            => Body
-                    },
-                    OutParticipantMap = #{
-                        ?USER_NAME      => ToUser,
-                        ?DOMAIN_NAME    => ToDomain,
-                        ?ROLE           => callee
-                    },
-                    OutgoingInvite = #outgoing_invite{
-                        target_uri  = TargetUri,
-                        serv_id     = AppId,
-                        from        = FromHeader,
-                        to          = ToHeader,
-                        domain      = ServerDomain,
-                        port        = ServerPort2
-                    },
+                            InParticipantMap = #{
+                                ?USER_NAME      => FromUser,
+                                ?DOMAIN_NAME    => FromDomain,
+                                ?ROLE           => caller,
+                                ?REQUEST_HANDLE => ReqId,
+                                ?DIALOG_HANDLE  => InDialogId,
+                                ?SDP            => Body
+                            },
+                            OutParticipantMap = #{
+                                ?USER_NAME      => ToUser,
+                                ?DOMAIN_NAME    => ToDomain,
+                                ?ROLE           => callee
+                            },
+                            OutgoingInvite = #outgoing_invite{
+                                target_uri  = TargetUri,
+                                serv_id     = AppId,
+                                from        = FromHeader,
+                                to          = ToHeader,
+                                domain      = ServerDomain,
+                                port        = ServerPort2
+                            },
 
-                    io:format("voip_server: Start call ~p~n", [CallId]),
-                    voip_server_core:create_call({CallId, [InParticipantMap, OutParticipantMap], OutgoingInvite}),
+                            io:format("voip_server: Start call ~p~n", [CallId]),
+                            voip_server_core:create_call({CallId, [InParticipantMap, OutParticipantMap], OutgoingInvite}),
 
-                    noreply
+                            noreply
+                    end
             end
     end.
 

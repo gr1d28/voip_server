@@ -30,10 +30,11 @@ sequenceDiagram
 
 ```mermaid
 graph TD;
-    Supervisor--Static-->NkSIP;
+    Supervisor --Static-->NkSIP;
     Supervisor --Static--> Core;
-    Core -.Dynamic.-> Call_FSM1;
-    Core -.Dynamic.-> Call_FSM2;
+    Supervisor --Static--> Call_Supervisor;
+    Call_Supervisor -.Dynamic.-> Call_FSM1;
+    Call_Supervisor -.Dynamic.-> Call_FSM2;
 ```
 
 <!-- https://mermaid.js.org/syntax/sequenceDiagram.html -->

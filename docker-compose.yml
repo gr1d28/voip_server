@@ -1,9 +1,10 @@
 version: '3.8'
 
 services:
-  server-app:
+  server-app1:
     image: erlang:21
-    container_name: server
+    container_name: server1
+    hostname: node1
     working_dir: /app
     environment:
       - TZ=Asia/Novosibirsk
@@ -12,9 +13,9 @@ services:
       - ./include:/app/include
       - ./config:/app/config
       - ./rebar.config:/app/rebar.config
-      - ./scripts/run_server.sh:/app/scripts/run_server.sh
+      - ./scripts/run_server1.sh:/app/scripts/run_server.sh
       - ~/.erlang.cookie:/root/.erlang.cookie:ro
-      - server_data:/app/data
+      - server_data1:/app/data
     command: bash /app/scripts/run_server.sh
     restart: unless-stopped
     networks:
@@ -22,6 +23,31 @@ services:
         ipv4_address: 172.40.0.2
     stdin_open: true
     tty: true
+
+  server-app2:
+    image: erlang:21
+    container_name: server2
+    hostname: node2
+    working_dir: /app
+    environment:
+      - TZ=Asia/Novosibirsk
+    volumes:
+      - ./src:/app/src
+      - ./include:/app/include
+      - ./config:/app/config
+      - ./rebar.config:/app/rebar.config
+      - ./scripts/run_server2.sh:/app/scripts/run_server.sh
+      - ~/.erlang.cookie:/root/.erlang.cookie:ro
+      - server_data2:/app/data
+    command: bash /app/scripts/run_server.sh
+    restart: unless-stopped
+    networks:
+      server-network:
+        ipv4_address: 172.40.0.3
+    stdin_open: true
+    tty: true
+    # depends_on:
+    #   - server-app1
 
   # sipp-tester1:
   #   build:
@@ -60,7 +86,8 @@ services:
   #     - poll-app
 
 volumes:
-  server_data:
+  server_data1:
+  server_data2:
 
 networks:
   server-network:

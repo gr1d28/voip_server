@@ -15,9 +15,9 @@
     id              :: nksip:aor(),                  %% Внутренний ID (например, <<"101">>)
     role            :: participant_role(),
     status          :: participant_status(),
-    request_handle  :: nksip:handle(),          %% Transaction Handle (nksip:handle())
-    dialog_handle   :: nksip:handle(),       %% Dialog Handle (D_...)
-    sdp             :: nksip:body()                  %% Последний согласованный SDP
+    request_handle  :: nksip:handle() | undefined,          %% Transaction Handle (nksip:handle())
+    dialog_handle   :: nksip:handle() | undefined,       %% Dialog Handle (D_...)
+    sdp             :: nksip:body() | undefined                  %% Последний согласованный SDP
 }).
 
 -record(call, {
@@ -25,7 +25,9 @@
     fsm_pid         :: pid(),
     participants    :: [#participant{}],
     state           :: call_state(),
-    start_time      :: timestamp()
+    start_time      :: timestamp(),
+    from_header     :: nksip:uri(),
+    to_header     :: nksip:uri()
     %% conference_id
 }).
 

@@ -7,9 +7,10 @@
 
 -compile({parse_transform, ms_transform}).
 
+-include_lib("voip_server/include/voip_server_nodes.hrl").
 -include_lib("voip_server/include/voip_server_db.hrl").
 
--export([start/0, stop/0, create_tables/0, create_tables/1]).
+-export([start/0, start_slave/0, stop/0, create_tables/0, create_tables/1]).
 -export([ensure_tables/0, table_info/0, clear_all/0]).
 
 -export([add_user/4, add_user/5, get_user/2, delete_user/2, list_users/0, update_user_status/3]).
@@ -33,14 +34,46 @@ start() ->
             if
                 TablesCount =:= 1 ->
                     mnesia:stop(),
+                    io:format("mnesia stop and start_local()~n"),
                     start_local();
                 TablesCount =/= ?COUNT_TABLES ->
                     ensure_tables();
                 true ->
+                    io:format("voip_server_db: all tables exist~n"),
                     ok
             end;
         no ->
             start_local()
+    end.
+
+start_slave() ->
+    %% 1. Ждем, пока на мастере не просто поднимется сеть, а СТАРТУЕТ MNESIA
+    % ok = wait_for_master_mnesia(?MASTER_NODE, 15), %% 15 попыток
+
+    %% 2. Запускаем локальную mnesia с ЧИСТОЙ директорией (схема в RAM)
+    application:ensure_all_started(mnesia),
+
+    %% 3. Подключаемся к работающей базе мастера
+    case mnesia:change_config(extra_db_nodes, [?MASTER_NODE]) of
+        {ok, [?MASTER_NODE]} ->
+            io:format("Connected to master Mnesia cluster.~n"),
+            %% 4. Делаем свою локальную схему дисковой
+            case mnesia:change_table_copy_type(schema, node(), disc_copies) of
+                {atomic, ok} ->
+                    %% 5. Копируем таблицы с мастера к себе на диск
+                    ok = copy_tables_from_master(?MASTER_NODE);
+                {aborted, {already_exists, schema, _, disc_copies}} ->
+                    io:format("voip_server_db: schema already_exist~n"),
+                    %% Если схема уже была дисковой (перезапуск слейва)
+                    ok = copy_tables_from_master(?MASTER_NODE);
+                {aborted, Reason} ->
+                    {error, {schema_copy_failed, Reason}}
+            end;
+        {ok, []} ->
+            %% Мы уже были подключены или мастер не отдал конфигурацию
+            wait_for_tables();
+        {error, Reason} ->
+            {error, {connect_to_cluster_failed, Reason}}
     end.
 
 %% @doc Остановка БД
@@ -51,20 +84,31 @@ stop() ->
 %% @doc Локальный запуск mnesia
 -spec start_local() -> ok | {error, term()}.
 start_local() ->
-    case mnesia:create_schema([node()]) of
-        ok ->
+    case mnesia:system_info(use_dir) of
+        true ->
+            io:format("Schema already exists on disk. Starting Mnesia...~n"),
             case mnesia:start() of
                 ok ->
-                    create_tables();
+                    wait_for_tables();
                 {error, Reason} ->
-                    io:format("Error in start mnesia application: ~p~n", [Reason]),
+                    io:format("Error starting Mnesia: ~p~n", [Reason]),
                     {error, Reason}
             end;
-        {error, {_, {already_exists, _}}} -> ok;
-        Error -> Error
+        false ->
+            io:format("First run. Creating new schema...~n"),
+            mnesia:stop(),
+            case mnesia:create_schema([node()]) of
+                ok ->
+                    ok = mnesia:start(),
+                    ok = create_tables(),
+                    wait_for_tables();
+                {error, Error} ->
+                    io:format("Error creating schema: ~p~n", [Error]),
+                    {error, Error}
+            end
     end.
 
-%% @doc Создание всех таблиц на текущем узле (RAM копии)
+%% @doc Создание всех таблиц на текущем узле
 -spec create_tables() -> ok | {error, term()}.
 create_tables() ->
     create_tables([node()]).
@@ -72,11 +116,7 @@ create_tables() ->
 %% @doc Создание всех таблиц на указанных узлах
 -spec create_tables([node()]) -> ok | {error, term()}.
 create_tables(Nodes) ->
-    case mnesia:create_schema(Nodes) of
-        ok -> ok;
-        {error, {_, {already_exists, _}}} -> ok;
-        Error -> Error
-    end,
+    io:format("create_tables(~p)~n", [Nodes]),
 
     Tables = [
         {users, [
@@ -354,5 +394,48 @@ table_opts(dialplan) ->
 init_table_users() ->
     Hash1 = nksip_auth:make_ha1(<<"100">>, <<"1234">>, <<"172.40.0.2">>),
     Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.2">>),
+    Hash3 = nksip_auth:make_ha1(<<"102">>, <<"1234">>, <<"172.40.0.2">>),
+    Hash4 = nksip_auth:make_ha1(<<"103">>, <<"1234">>, <<"172.40.0.2">>),
     add_user(<<"100">>, <<"172.40.0.2">>, Hash1, active, <<"DisplayName">>),
-    add_user(<<"101">>, <<"172.40.0.2">>, Hash2, active, <<"DisplayName">>).
+    add_user(<<"101">>, <<"172.40.0.2">>, Hash2, active, <<"DisplayName">>),
+    add_user(<<"102">>, <<"172.40.0.2">>, Hash3, active, <<"DisplayName">>),
+    add_user(<<"103">>, <<"172.40.0.2">>, Hash4, active, <<"DisplayName">>).
+
+% %% Цикл ожидания полной готовности Mnesia на мастере
+% wait_for_master_mnesia(_Master, 0) ->
+%     {error, master_mnesia_timeout};
+% wait_for_master_mnesia(Master, Retries) ->
+%     %% Сначала пингуем ноду, чтобы Erlang установил соединение
+%     net_adm:ping(Master),
+%     %% Делаем RPC-вызов к Mnesia на мастере, чтобы узнать её статус
+%     case rpc:call(Master, mnesia, system_info, [is_running]) of
+%         yes ->
+%             %% Mnesia на мастере запущена
+%             %% Ждем еще 1 секунду, чтобы гарантированно завершился voip_server_db:start() и создались таблицы
+%             timer:sleep(1000),
+%             io:format("Master Mnesia is YES and ready.~n"),
+%             ok;
+%         _NotReady ->
+%             %% Возвращает 'no', 'starting' или {badrpc, _} если мастер еще лежит
+%             io:format("Master Mnesia not ready yet (retries left: ~p)...~n", [Retries]),
+%             timer:sleep(2000), %% Ждем 2 секунды перед следующей проверкой
+%             wait_for_master_mnesia(Master, Retries - 1)
+%     end.
+
+%% Автоматическое копирование всех нужных таблиц
+copy_tables_from_master(_MasterNode) ->
+    Tables = ?TABLES_NAME_LIST,
+    lists:foreach(fun(Table) ->
+        case mnesia:add_table_copy(Table, node(), disc_copies) of
+            {atomic, ok} -> io:format("Table ~p copied.~n", [Table]);
+            {aborted, {already_exists, _, _}} -> ok; %% Таблица уже есть
+            {aborted, Reason} -> exit({copy_table_failed, Table, Reason})
+        end
+    end, Tables),
+    wait_for_tables().
+
+wait_for_tables() ->
+    case mnesia:wait_for_tables(?TABLES_NAME_LIST, 15000) of
+        ok -> ok;
+        {error, R} -> {error, {wait_tables_failed, R}}
+    end.

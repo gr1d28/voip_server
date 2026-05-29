@@ -1,0 +1,3 @@
+-define(MASTER_NODE, 'server_node1@172.40.0.2').
+-define(SLAVE_NODES, ['server_node2@172.40.0.3']).
+-define(NODE_LIST, [?MASTER_NODE | ?SLAVE_NODES]).

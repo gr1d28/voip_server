@@ -14,25 +14,26 @@
 -export([create_call/1, send_bye/1, send_cancel/1]).
 
 start_link() ->
-    gen_server:start_link({global, ?MODULE}, ?MODULE, [], []).
+    gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
 
 -spec create_call({nksip:call_id(), participant_list(), outgoing_invite()}) -> ok.
 create_call({CallId, ParticipantList, OutgoingInvite}) ->
-    gen_server:cast({global, ?MODULE}, {add_call, CallId, ParticipantList, OutgoingInvite}).
+    io:format("local call create~n"),
+    gen_server:cast(?MODULE, {add_call, CallId, ParticipantList, OutgoingInvite}).
 
 -spec send_bye({nksip:call_id(), binary(), binary(), binary(), binary(), nksip:handle()}) -> ok.
 send_bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}) ->
-    gen_server:cast({global, ?MODULE}, {bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}).
+    gen_server:cast(?MODULE, {bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}).
 
 -spec send_cancel(nksip:call_id()) -> ok.
 send_cancel(CallId) ->
-    gen_server:cast({global, ?MODULE}, {cancel, CallId}).
+    gen_server:cast(?MODULE, {cancel, CallId}).
 
 -spec init([]) -> {ok, [{nksip:call_id(), pid()}] | []}.
 init([]) ->
     CallIdList = voip_server_db:get_all_map_CallId_FsmPid(),
     io:format("core: module is initialized. Number of active calls - ~p~n", [length(CallIdList)]),
-    {ok, CallIdList}.
+    {ok, []}. %% Активные звонки уже не восстановить
 
 terminate(Reason, _St) ->
     io:format("core: terminate with reason: ~p~n", [Reason]),
@@ -54,14 +55,6 @@ handle_cast({add_call, CallId, ParticipantList, OutgoingInvite}, CallIdList) ->
         {_, FsmPid} ->
             io:format("core: call with call_id ~p has already started~n", [CallId]),
             voip_server_call_fsm:re_invite(FsmPid, {ParticipantList, OutgoingInvite}),
-            % [InitiatorMap, InvitedMap] = ParticipantList,
-            % FromUser = maps:get(?USER_NAME, InitiatorMap),
-            % FromDomain = maps:get(?DOMAIN_NAME, InitiatorMap),
-            % ToUser = maps:get(?USER_NAME, InvitedMap),
-            % ToDomain = maps:get(?DOMAIN_NAME, InvitedMap),
-            % ReqId = maps:get(?REQUEST_HANDLE, InitiatorMap),
-
-            % voip_server_call_fsm:re_invite(FsmPid, {FromUser, FromDomain, ToUser, ToDomain, ReqId}),
             {noreply, CallIdList}
     end;
 handle_cast({bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}, CallIdList) ->

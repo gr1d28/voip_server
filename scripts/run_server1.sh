@@ -5,11 +5,11 @@ erl -name server_node1@172.40.0.2 \
     -config config/sys.config \
     -setcookie "$(cat /root/.erlang.cookie)" \
     -eval "
-        %% Запускаем Mnesia и репликацию
-        ok = voip_server_mnesia:setup_cluster(),
+        %% Сначала настраиваем кластер Mnesia
+        ok = voip_server_db:start_master(),
 
         %% Запускаем приложение
-        application:start(voip_server),
+        {ok, _} = application:ensure_all_started(voip_server),
 
-        io:format('Master node running~n')
+        io:format('Master node running~n').
     "

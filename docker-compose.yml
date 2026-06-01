@@ -11,7 +11,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./include:/app/include
-      - ./config:/app/config
+      - ./config/sys1.config:/app/config/sys.config
       - ./rebar.config:/app/rebar.config
       - ./scripts/run_server1.sh:/app/scripts/run_server.sh
       - ~/.erlang.cookie:/root/.erlang.cookie:ro
@@ -34,7 +34,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./include:/app/include
-      - ./config:/app/config
+      - ./config/sys2.config:/app/config/sys.config
       - ./rebar.config:/app/rebar.config
       - ./scripts/run_server2.sh:/app/scripts/run_server.sh
       - ~/.erlang.cookie:/root/.erlang.cookie:ro

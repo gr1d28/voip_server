@@ -40,7 +40,8 @@ start_master() ->
     io:format("Not exist tables on master: ~p~n", [NotExistTables]),
     case NotExistTables of
         [] ->
-            io:format("All tables exist on ~p~n", [node()]);
+            io:format("All tables exist on ~p~n", [node()]),
+            ok;
         _ ->
             io:format("Tables not exist in schema ~p~n", [node()]),
             io:format("Sync cluster nodes ~p~n", [[node() | nodes()]]),
@@ -345,11 +346,20 @@ get_table_opts(Table, AvailableNodes) ->
              {attributes, record_info(fields, dialplan)}]
     end.
 
-%% Запускается на slave при первой загрузке
 sync_cluster_nodes_slave() ->
     io:format("Call sync_cluster_nodes_slave on node ~p~n", [node()]),
+    sync_cluster_nodes_slave(30),
+    io:format("Slave continue~n").
 
-    timer:sleep(30000),
-
-    io:format("Continue slave ~p~n", [node()]),
-    ok.
+sync_cluster_nodes_slave(0) ->
+    io:format("Slave not end~n"),
+    ok;
+sync_cluster_nodes_slave(Times) ->
+    case mnesia:system_info(running_db_nodes) of
+        ?NODE_LIST ->
+            ok;
+        List ->
+            io:format("Exist nodes: ~p~n", [List]),
+            timer:sleep(1000),
+            sync_cluster_nodes_slave(Times - 1)
+    end.

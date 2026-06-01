@@ -31,8 +31,8 @@ send_cancel(CallId) ->
 
 -spec init([]) -> {ok, [{nksip:call_id(), pid()}] | []}.
 init([]) ->
-    CallIdList = voip_server_db:get_all_map_CallId_FsmPid(),
-    io:format("core: module is initialized. Number of active calls - ~p~n", [length(CallIdList)]),
+    % CallIdList = voip_server_db:get_all_map_CallId_FsmPid(),
+    % io:format("core: module is initialized. Number of active calls - ~p~n", [length(CallIdList)]),
     {ok, []}. %% Активные звонки уже не восстановить
 
 terminate(Reason, _St) ->

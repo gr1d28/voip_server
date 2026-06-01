@@ -25,29 +25,64 @@ sip_authorize(AuthList, Req, _Call) ->
     FromUser = nksip_sipmsg:get_meta(from_user, Req),
     FromDomain = nksip_sipmsg:get_meta(from_domain, Req),
     io:format("voip_server: sip_authorize/3 Method: ~p FromUser: ~p~n", [Method, FromUser]),
-    case lists:member(dialog, AuthList) orelse lists:member(register, AuthList) of
-        true -> ok;
-        false ->
-            case proplists:get_value({digest, FromDomain}, AuthList) of
-                true -> ok;
-                false -> forbidden;
-                undefined -> {proxy_authenticate, FromDomain}
-            end
+    io:format("voip_server: AuthList: ~p~n", [AuthList]),
+
+    case Method of
+        'REGISTER' ->
+            %% Проверяем, есть ли аутентификация в AuthList
+            IsAuthenticated = case AuthList of
+                [] ->
+                    false;
+                _ ->
+                    %% Проверяем различные форматы AuthList
+                    lists:any(
+                        fun(X) ->
+                            case X of
+                                {{digest, _Domain}, true} ->
+                                    true;
+                                {digest, _Domain} ->
+                                    true;
+                                digest ->
+                                    true;
+                                [{{digest, _Domain}, true}] ->
+                                    true;
+                                %% Любой другой непустой список
+                                _ when is_list(X) andalso X /= [] ->
+                                    %% Проверяем вложенный список
+                                    lists:any(fun(Y) ->
+                                        case Y of
+                                            {{digest, _}, true} -> true;
+                                            {digest, _} -> true;
+                                            digest -> true;
+                                            _ -> false
+                                        end
+                                    end, X);
+                                _ ->
+                                    false
+                            end
+                        end, AuthList)
+            end,
+
+            if IsAuthenticated ->
+                io:format("voip_server: REGISTER already authenticated for ~p~n", [FromUser]),
+                ok;
+            true ->
+                io:format("voip_server: REGISTER requesting authentication for ~p~n", [FromUser]),
+                {authenticate, FromDomain}
+            end;
+        _ ->
+            ok
     end.
 
-sip_route(_Scheme, <<>>, <<"localhost">>, _Req, _Call) ->
-    % we want to act as an endpoint or B2BUA
-    io:format("voip_server: sip_route(User = <<>>)~n"),
+sip_route(_Scheme, <<>>, <<"localhost">>, Req, _Call) ->
+    %% we want to act as an endpoint or B2BUA
+    Method = nksip_sipmsg:get_meta(method, Req),
+    io:format("voip_server: sip_route(localhost) Method: ~p~n", [Method]),
     process;
-
 sip_route(_Scheme, User, Domain, Req, _Call) ->
-    io:format("voip_server: sip_route(User = ~p, Domain: ~p)~n", [User, Domain]),
-    case nksip_request:is_local_ruri(Req) of
-        true ->
-            process;
-        false ->
-            proxy
-    end.
+    Method = nksip_sipmsg:get_meta(method, Req),
+    io:format("voip_server: sip_route(Method: ~p, User: ~p, Domain: ~p)~n", [Method, User, Domain]),
+    process.
 
 sip_register(Req, _Call) ->
     {ok, [{from_scheme, FromScheme}, {from_user, FromUser}, {from_domain, FromDomain}]} =

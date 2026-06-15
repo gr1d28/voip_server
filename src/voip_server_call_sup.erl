@@ -34,7 +34,7 @@ init([]) ->
     ChildSpec = #{
         id => voip_server_call_fsm,
         start => {voip_server_call_fsm, start_link, []},
-        restart => temporary,
+        restart => transient,
         shutdown => 5000,
         type => worker,
         modules => [voip_server_call_fsm]

@@ -1,0 +1,1 @@
+-type core_state() :: #{nksip:call_id() => pid()} | #{}.

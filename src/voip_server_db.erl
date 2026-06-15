@@ -10,8 +10,7 @@
 -include_lib("voip_server/include/voip_server_nodes.hrl").
 -include_lib("voip_server/include/voip_server_db.hrl").
 
--export([start/0, start_slave/0, stop/0, create_tables/0, create_tables/1]).
--export([ensure_tables/0, table_info/0, clear_all/0]).
+-export([start_master/0, start_slave/0, stop/0, table_info/0]).
 
 -export([add_user/4, add_user/5, get_user/2, delete_user/2, list_users/0, update_user_status/3]).
 -export([get_registrations/1, get_registrations/2, add_registration/2, delete_registrations/1, clear_registrations/0, count_registrations/1, count_all_registrations/0]).
@@ -20,165 +19,71 @@
 
 -export_type([participant_role/0]).
 
+start_master() ->
+    io:format("Start master mnesia~n"),
+
+    case mnesia:system_info(is_running) of
+        yes ->
+            io:format("Mnesia was been started on master ~p~n", [node()]);
+        no ->
+            mnesia:start(),
+            io:format("Start mnesia on master ~p~n", [node()])
+    end,
+    io:format("Mnesia system info: ~p~n", [mnesia:system_info()]),
+    %% Проверка доступности резервных узлов
+    AvailableNodes = [Node ||  Node <- ?NODE_LIST, net_adm:ping(Node) =:= pong],
+    io:format("Available nodes: ~p~n", [AvailableNodes]),
+
+    %% Проверка локальной schema на наличе таблиц в базе
+    ExistTables = mnesia:system_info(tables),
+    NotExistTables = ?TABLES_NAME_LIST -- ExistTables,
+    io:format("Not exist tables on master: ~p~n", [NotExistTables]),
+    case NotExistTables of
+        [] ->
+            io:format("All tables exist on ~p~n", [node()]),
+            ok;
+        _ ->
+            io:format("Tables not exist in schema ~p~n", [node()]),
+            io:format("Sync cluster nodes ~p~n", [[node() | nodes()]]),
+            sync_cluster_nodes(AvailableNodes)
+    end.
+
+start_slave() ->
+    io:format("Start slave mnesia~n"),
+
+    case mnesia:system_info(is_running) of
+        yes ->
+            io:format("Mnesia was been started on slave ~p~n", [node()]);
+        no ->
+            mnesia:start(),
+            io:format("Start mnesia on slave ~p~n", [node()])
+    end,
+    io:format("Mnesia system info: ~p~n", [mnesia:system_info()]),
+    %% Проверка локальной schema на наличе таблиц в базе
+    ExistTables = mnesia:system_info(tables),
+    NotExistTables = ?TABLES_NAME_LIST -- ExistTables,
+    io:format("Not exist tables on slave: ~p~n", [NotExistTables]),
+    case NotExistTables of
+        [] ->
+            io:format("All tables exist on ~p~n", [node()]);
+        _ ->
+            io:format("Sync cluster nodes slave ~p~n", [[node() | nodes()]]),
+            sync_cluster_nodes_slave()
+    end.
+
 %%%===================================================================
 %%% API functions
 %%%===================================================================
 
-%% @doc Запуск и инициализация БД
--spec start() -> ok | {error, term()}.
-start() ->
-    case mnesia:system_info(is_running) of
-        yes ->
-            ExistingTables = mnesia:system_info(tables),
-            TablesCount = length(ExistingTables),
-            if
-                TablesCount =:= 1 ->
-                    mnesia:stop(),
-                    io:format("mnesia stop and start_local()~n"),
-                    start_local();
-                TablesCount =/= ?COUNT_TABLES ->
-                    ensure_tables();
-                true ->
-                    io:format("voip_server_db: all tables exist~n"),
-                    ok
-            end;
-        no ->
-            start_local()
-    end.
-
-start_slave() ->
-    %% 1. Ждем, пока на мастере не просто поднимется сеть, а СТАРТУЕТ MNESIA
-    % ok = wait_for_master_mnesia(?MASTER_NODE, 15), %% 15 попыток
-
-    %% 2. Запускаем локальную mnesia с ЧИСТОЙ директорией (схема в RAM)
-    application:ensure_all_started(mnesia),
-
-    %% 3. Подключаемся к работающей базе мастера
-    case mnesia:change_config(extra_db_nodes, [?MASTER_NODE]) of
-        {ok, [?MASTER_NODE]} ->
-            io:format("Connected to master Mnesia cluster.~n"),
-            %% 4. Делаем свою локальную схему дисковой
-            case mnesia:change_table_copy_type(schema, node(), disc_copies) of
-                {atomic, ok} ->
-                    %% 5. Копируем таблицы с мастера к себе на диск
-                    ok = copy_tables_from_master(?MASTER_NODE);
-                {aborted, {already_exists, schema, _, disc_copies}} ->
-                    io:format("voip_server_db: schema already_exist~n"),
-                    %% Если схема уже была дисковой (перезапуск слейва)
-                    ok = copy_tables_from_master(?MASTER_NODE);
-                {aborted, Reason} ->
-                    {error, {schema_copy_failed, Reason}}
-            end;
-        {ok, []} ->
-            %% Мы уже были подключены или мастер не отдал конфигурацию
-            wait_for_tables();
-        {error, Reason} ->
-            {error, {connect_to_cluster_failed, Reason}}
-    end.
-
-%% @doc Остановка БД
--spec stop() -> ok | {error, term()}.
+%% @doc Остановка
 stop() ->
     mnesia:stop().
-
-%% @doc Локальный запуск mnesia
--spec start_local() -> ok | {error, term()}.
-start_local() ->
-    case mnesia:system_info(use_dir) of
-        true ->
-            io:format("Schema already exists on disk. Starting Mnesia...~n"),
-            case mnesia:start() of
-                ok ->
-                    wait_for_tables();
-                {error, Reason} ->
-                    io:format("Error starting Mnesia: ~p~n", [Reason]),
-                    {error, Reason}
-            end;
-        false ->
-            io:format("First run. Creating new schema...~n"),
-            mnesia:stop(),
-            case mnesia:create_schema([node()]) of
-                ok ->
-                    ok = mnesia:start(),
-                    ok = create_tables(),
-                    wait_for_tables();
-                {error, Error} ->
-                    io:format("Error creating schema: ~p~n", [Error]),
-                    {error, Error}
-            end
-    end.
-
-%% @doc Создание всех таблиц на текущем узле
--spec create_tables() -> ok | {error, term()}.
-create_tables() ->
-    create_tables([node()]).
-
-%% @doc Создание всех таблиц на указанных узлах
--spec create_tables([node()]) -> ok | {error, term()}.
-create_tables(Nodes) ->
-    io:format("create_tables(~p)~n", [Nodes]),
-
-    Tables = [
-        {users, [
-            {type, set},
-            {disc_copies, Nodes},
-            {record_name, users},
-            {attributes, record_info(fields, users)},
-            {index, [domain]}
-        ]},
-        {registrations, [
-            {type, bag},        %% один AOR может иметь несколько контактов
-            {disc_copies, Nodes},
-            {record_name, registrations},
-            {attributes, record_info(fields, registrations)}
-        ]},
-        {call, [
-            {type, set},
-            {disc_copies, Nodes},
-            {record_name, call},
-            {attributes, record_info(fields, call)}
-        ]},
-        {dialplan, [
-            {type, set},
-            {disc_copies, Nodes},
-            {record_name, dialplan},
-            {attributes, record_info(fields, dialplan)}
-        ]}
-    ],
-
-    Results = [create_table(Name, Opts) || {Name, Opts} <- Tables],
-
-    case lists:all(fun(Result) -> Result =:= ok end, Results) of
-        true -> ok;
-        false -> {error, table_creation_failed}
-    end.
-
-%% @doc Проверка и создание таблиц если их нет (для hot-загрузки)
--spec ensure_tables() -> ok.
-ensure_tables() ->
-    io:format("ensure table~n"),
-    Tables = ?TABLES_NAME_LIST,
-    lists:foreach(fun ensure_table/1, Tables).
 
 %% @doc Информация о таблицах
 -spec table_info() -> [{atom(), non_neg_integer(), non_neg_integer()}].
 table_info() ->
     [{Table, mnesia:table_info(Table, size), mnesia:table_info(Table, memory)}
      || Table <- ?TABLES_NAME_LIST, mnesia:table_info(Table, exists)].
-
-%% @doc Очистка всех данных из таблиц
--spec clear_all() -> ok | {error, term()}.
-clear_all() ->
-    F = fun() ->
-        [mnesia:delete_table(TableName) || TableName <- ?TABLES_NAME_LIST]
-    end,
-    case mnesia:transaction(F) of
-        {atomic, _} ->
-            create_tables(),
-            ok;
-        Error ->
-            Error
-    end.
 
 %%%===================================================================
 %%% User operations
@@ -327,22 +232,42 @@ add_call(Call) ->
 
 -spec get_call(nksip:call_id()) -> [#call{}].
 get_call(CallId) ->
-    mnesia:dirty_read({call, CallId}).
+    case mnesia:dirty_read({call, CallId}) of
+        [] ->
+            mnesia:dirty_index_read(call, CallId, call_id_b);
+        Call ->
+            Call
+    end.
 
 -spec delete_call(nksip:call_id()) -> ok | {error, term()}.
 delete_call(CallId) ->
-    F = fun () -> mnesia:delete({call, CallId}) end,
+    F = fun() ->
+        case mnesia:read({call, CallId}) of
+            [] ->
+                case mnesia:index_read(call, CallId, call_id_b) of
+                    [] ->
+                        ok;
+                    Calls ->
+                        lists:foreach(fun(Call) ->
+                            mnesia:delete({call, Call#call.call_id_a})
+                        end, Calls)
+                end;
+            [_Call] ->
+                mnesia:delete({call, CallId})
+        end
+    end,
     case mnesia:transaction(F) of
         {atomic, ok} -> ok;
         {aborted, Reason} -> {error, Reason}
     end.
 
--spec get_all_map_CallId_FsmPid() -> [{nksip:call_id(), pid()}] | [].
+-spec get_all_map_CallId_FsmPid() -> [{nksip:call_id(), nksip:call_id(), pid()}] | [].
 get_all_map_CallId_FsmPid() ->
     %% Возвращаем все звонки, кроме завершенных
-    MatchSpec = ets:fun2ms(fun(#call{call_id = CallId, fsm_pid = FsmPid, state = State})
+    MatchSpec = ets:fun2ms(fun(#call{call_id_a = CallIdA, call_id_b = CallIdB,
+                                fsm_pid = FsmPid, state = State})
                              when State /= terminated ->
-                                  {CallId, FsmPid}
+                                  {CallIdA, CallIdB, FsmPid}
                            end),
     mnesia:dirty_select(call, MatchSpec).
 
@@ -354,43 +279,6 @@ count_all_call() ->
 %%% Internal functions
 %%%===================================================================
 
-%% @private Создание одной таблицы
--spec create_table(atom(), [tuple()]) -> ok | {error, term()}.
-create_table(Name, Opts) ->
-    io:format("create table: ~p ~p~n", [Name, Opts]),
-    case mnesia:create_table(Name, Opts) of
-        {atomic, ok} -> ok;
-        {aborted, {already_exists, _}} -> ok;
-        Error -> Error
-    end.
-
-%% @private Проверка существования таблицы
--spec ensure_table(atom()) -> ok.
-ensure_table(Table) ->
-    io:format("ensure table (~p)~n", [Table]),
-    ExistTables = mnesia:system_info(tables),
-    case lists:member(Table, ExistTables) of
-        true -> ok;
-        false ->
-            create_table(Table, table_opts(Table))
-            %% init_table(Table)
-    end.
-
-%% @private Параметры таблиц по умолчанию
--spec table_opts(atom()) -> [tuple()].
-table_opts(users) ->
-    [{type, set}, {disc_copies, [node()]}, {record_name, users},
-     {attributes, record_info(fields, users)}];
-table_opts(registrations) ->
-    [{type, bag}, {disc_copies, [node()]}, {record_name, registrations},
-     {attributes, record_info(fields, registrations)}];
-table_opts(call) ->
-    [{type, set}, {disc_copies, [node()]}, {record_name, call},
-     {attributes, record_info(fields, call)}];
-table_opts(dialplan) ->
-    [{type, set}, {disc_copies, [node()]}, {record_name, dialplan},
-     {attributes, record_info(fields, dialplan)}].
-
 init_table_users() ->
     Hash1 = nksip_auth:make_ha1(<<"100">>, <<"1234">>, <<"172.40.0.2">>),
     Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.2">>),
@@ -401,41 +289,97 @@ init_table_users() ->
     add_user(<<"102">>, <<"172.40.0.2">>, Hash3, active, <<"DisplayName">>),
     add_user(<<"103">>, <<"172.40.0.2">>, Hash4, active, <<"DisplayName">>).
 
-% %% Цикл ожидания полной готовности Mnesia на мастере
-% wait_for_master_mnesia(_Master, 0) ->
-%     {error, master_mnesia_timeout};
-% wait_for_master_mnesia(Master, Retries) ->
-%     %% Сначала пингуем ноду, чтобы Erlang установил соединение
-%     net_adm:ping(Master),
-%     %% Делаем RPC-вызов к Mnesia на мастере, чтобы узнать её статус
-%     case rpc:call(Master, mnesia, system_info, [is_running]) of
-%         yes ->
-%             %% Mnesia на мастере запущена
-%             %% Ждем еще 1 секунду, чтобы гарантированно завершился voip_server_db:start() и создались таблицы
-%             timer:sleep(1000),
-%             io:format("Master Mnesia is YES and ready.~n"),
-%             ok;
-%         _NotReady ->
-%             %% Возвращает 'no', 'starting' или {badrpc, _} если мастер еще лежит
-%             io:format("Master Mnesia not ready yet (retries left: ~p)...~n", [Retries]),
-%             timer:sleep(2000), %% Ждем 2 секунды перед следующей проверкой
-%             wait_for_master_mnesia(Master, Retries - 1)
-%     end.
-
-%% Автоматическое копирование всех нужных таблиц
-copy_tables_from_master(_MasterNode) ->
-    Tables = ?TABLES_NAME_LIST,
-    lists:foreach(fun(Table) ->
-        case mnesia:add_table_copy(Table, node(), disc_copies) of
-            {atomic, ok} -> io:format("Table ~p copied.~n", [Table]);
-            {aborted, {already_exists, _, _}} -> ok; %% Таблица уже есть
-            {aborted, Reason} -> exit({copy_table_failed, Table, Reason})
+%% Запускается на master при первой загрузке системы
+sync_cluster_nodes(NodeList) ->
+    %% Остановка mnesia на всех доступных узлах
+    lists:foreach(fun(Node) ->
+        case rpc:call(Node, mnesia, stop, []) of
+            stopped ->
+                io:format("Stop mnesia on ~p~n", [Node]);
+            {error, Reason1} ->
+                io:format("Error in stop mnesia on ~p: ~p~n", [Node, Reason1])
         end
-    end, Tables),
-    wait_for_tables().
+    end, NodeList),
 
-wait_for_tables() ->
-    case mnesia:wait_for_tables(?TABLES_NAME_LIST, 15000) of
-        ok -> ok;
-        {error, R} -> {error, {wait_tables_failed, R}}
+    %% Удаление дефолтных schema
+    lists:foreach(fun(Node) ->
+        case rpc:call(Node, mnesia, delete_schema, [[Node]]) of
+            ok ->
+                io:format("Delete schema on ~p~n", [Node]);
+            {error, Reason2} ->
+                io:format("Error in delete schema on ~p: ~p~n", [Node, Reason2])
+        end
+    end, NodeList),
+
+    %% Создание schema на master с включением всех доступных узлов
+    case mnesia:create_schema(NodeList) of
+        ok ->
+            io:format("Create schema on master node ~p~n", [node()]);
+        {error, Reason3} ->
+            io:format("Error in create schema on master node ~p: ~p~n", [node(), Reason3])
+    end,
+
+    %% Запуск mnesia на всех узлах с новой schema
+    lists:foreach(fun(Node) ->
+        case rpc:call(Node, mnesia, start, []) of
+            ok ->
+                io:format("Start mnesia on ~p~n", [Node]);
+            {error, Reason4} ->
+                io:format("Error in start mnesia on ~p: ~p~n", [Node, Reason4])
+        end
+    end, NodeList),
+
+    AvailableNodes = mnesia:system_info(running_db_nodes),
+    case ?NODE_LIST -- AvailableNodes of
+        %% Все узлы запустились в кластере
+        [] ->
+            io:format("All nodes ready to create table~n"),
+            ResultList = [mnesia:create_table(Table, get_table_opts(Table, AvailableNodes)) || Table <- ?TABLES_NAME_LIST],
+            case proplists:get_all_values(aborted, ResultList) of
+                %% Нет ошибок при добавлении таблиц
+                [] ->
+                    io:format("Tables ~p created on nodes ~p~n", [?TABLES_NAME_LIST, AvailableNodes]),
+                    ok;
+                ErrorList ->
+                    io:format("Error: Tables not created with reasons: ~p~n", [ErrorList]),
+                    {error, tables_not_created}
+            end;
+        DiffList ->
+            io:format("Error: Not all available nodes have launched mnesia: ~p~n", [DiffList]),
+            {error, not_all_launched}
+    end.
+
+%% @private Получить опции для создания таблицы
+get_table_opts(Table, AvailableNodes) ->
+    case Table of
+        users ->
+            [{type, set}, {disc_copies, AvailableNodes}, {record_name, users},
+             {attributes, record_info(fields, users)}, {index, [domain]}];
+        registrations ->
+            [{type, bag}, {disc_copies, AvailableNodes}, {record_name, registrations},
+             {attributes, record_info(fields, registrations)}];
+        call ->
+            [{type, set}, {disc_copies, AvailableNodes}, {record_name, call},
+             {attributes, record_info(fields, call)}, {index, [call_id_b]}];
+        dialplan ->
+            [{type, set}, {disc_copies, AvailableNodes}, {record_name, dialplan},
+             {attributes, record_info(fields, dialplan)}]
+    end.
+
+sync_cluster_nodes_slave() ->
+    io:format("Call sync_cluster_nodes_slave on node ~p~n", [node()]),
+    sync_cluster_nodes_slave(30),
+    io:format("Slave continue~n").
+
+sync_cluster_nodes_slave(0) ->
+    io:format("Slave not end~n"),
+    ok;
+sync_cluster_nodes_slave(Times) ->
+    case mnesia:system_info(running_db_nodes) of
+        ?NODE_LIST ->
+            ok;
+        List ->
+            io:format("Exist nodes: ~p~n", [List]),
+            timer:sleep(1000),
+            sync_cluster_nodes_slave(Times - 1)
     end.

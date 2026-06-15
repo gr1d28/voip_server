@@ -21,7 +21,8 @@
 }).
 
 -record(call, {
-    call_id         :: nksip:call_id(),
+    call_id_a       :: nksip:call_id(),
+    call_id_b       :: nksip:call_id() | undefined,
     fsm_pid         :: pid(),
     participants    :: [#participant{}],
     state           :: call_state(),
@@ -45,6 +46,6 @@
 -type user_status() :: active | inactive.
 -type action()      :: user | redirect | proxy.
 -type timestamp() :: {MegaSecs :: non_neg_integer(), Secs :: non_neg_integer(), MicroSecs :: non_neg_integer()}.
--type call_state() :: initializing | ringing | active | terminating | terminated.
+-type call_state() :: initializing | trying | ringing | active | terminating | terminated.
 -type participant_status() :: idle | inviting | ringing | active | hold | terminated.
 -type participant_role() :: caller | callee.

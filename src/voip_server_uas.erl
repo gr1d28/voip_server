@@ -68,7 +68,7 @@ sip_authorize(AuthList, Req, _Call) ->
                 ok;
             true ->
                 io:format("voip_server: REGISTER requesting authentication for ~p~n", [FromUser]),
-                {authenticate, FromDomain}
+                {proxy_authenticate, FromDomain}
             end;
         _ ->
             ok

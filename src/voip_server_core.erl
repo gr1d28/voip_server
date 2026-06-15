@@ -2,7 +2,8 @@
 %%% @doc Модуль для обработки SIP событий и создания сессий звонков
 %%% @end
 %%%-------------------------------------------------------------------
-
+%% TODO предусмотреть восстановление процессов call_fsm при падении call_fsm_sup
+%% TODO переделать состояние, все fsm_pid брать из mnesia
 -module(voip_server_core).
 
 -behaviour(gen_server).
@@ -12,6 +13,7 @@
 
 -export([start_link/0, init/1, terminate/2, handle_cast/2, handle_call/3, handle_info/2, code_change/3]).
 -export([create_call/1, send_bye/1, send_cancel/1]).
+-export([add_call_id_b/2, delete_call_id/1, change_call_id/2]).
 
 start_link() ->
     gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
@@ -29,11 +31,31 @@ send_bye({CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}) ->
 send_cancel(CallId) ->
     gen_server:cast(?MODULE, {cancel, CallId}).
 
+%% private for call_fsm
+%% Добавление второго плеча звонка (call_id_b) в state
+-spec add_call_id_b(nksip:call_id(), pid()) -> ok.
+add_call_id_b(CallIdB, FsmPid) ->
+    gen_server:cast(?MODULE, {add_call_id_b, CallIdB, FsmPid}).
+
+%% Удаление call_id из состояния core
+-spec delete_call_id(nksip:call_id()) -> ok.
+delete_call_id(CallId) ->
+    gen_server:cast(?MODULE, {delete_call_id, CallId}).
+
+%% Изменение идентификатора pid процесса обработчика вызова fsm (при восстановлении fsm процесса)
+-spec change_call_id(nksip:call_id(), pid()) -> ok.
+change_call_id(CallId, FsmPid) ->
+    gen_server:cast(?MODULE, {change_call_id, CallId, FsmPid}).
+
 -spec init([]) -> {ok, [{nksip:call_id(), pid()}] | []}.
 init([]) ->
-    % CallIdList = voip_server_db:get_all_map_CallId_FsmPid(),
-    % io:format("core: module is initialized. Number of active calls - ~p~n", [length(CallIdList)]),
-    {ok, []}. %% Активные звонки уже не восстановить
+    CallIdList1 = voip_server_db:get_all_map_CallId_FsmPid(),
+    CallIdList2 = lists:foldl(fun ({CallIdA, CallIdB, FsmPid}, Acc) -> case is_process_alive(FsmPid) of
+        true -> [{CallIdB, FsmPid}, {CallIdA, FsmPid} | Acc];
+        false -> Acc
+    end end, [], CallIdList1),
+    io:format("core: module is initialized. Number of active calls - ~p~n", [length(CallIdList2) div 2]),
+    {ok, CallIdList2}.
 
 terminate(Reason, _St) ->
     io:format("core: terminate with reason: ~p~n", [Reason]),
@@ -66,8 +88,7 @@ handle_cast({bye, CallId, FromUser, FromDomain, ToUser, ToDomain, ReqId}, CallId
         {_, FsmPid} ->
             io:format("core: sending bye and stop call with call_id ~p~n", [CallId]),
             voip_server_call_fsm:bye(FsmPid, {FromUser, FromDomain, ToUser, ToDomain, ReqId}),
-            NewCallIdList = lists:keydelete(CallId, 1, CallIdList),
-            {noreply, NewCallIdList}
+            {noreply, CallIdList}
     end;
 handle_cast({cancel, CallId}, CallIdList) ->
     io:format("core: receive cancel cast~n"),
@@ -78,9 +99,21 @@ handle_cast({cancel, CallId}, CallIdList) ->
         {_, FsmPid} ->
             io:format("core: sending cancel and stop call with call_id ~p~n", [CallId]),
             voip_server_call_fsm:cancel(FsmPid),
-            NewCallIdList = lists:keydelete(CallId, 1, CallIdList),
-            {noreply, NewCallIdList}
+            {noreply, CallIdList}
     end;
+handle_cast({add_call_id_b, CallIdB, FsmPid}, CallIdList) ->
+    io:format("core: receive add_call_id_b cast~n"),
+    {noreply, [{CallIdB, FsmPid} | CallIdList]};
+handle_cast({delete_call_id, CallId}, CallIdList) ->
+    io:format("core: receive delete_call_id cast~n"),
+    NewCallIdList = lists:keydelete(CallId, 1, CallIdList),
+    {noreply, NewCallIdList};
+handle_cast({change_call_id, CallId, FsmPid}, CallIdList) ->
+    io:format("core: receive change_call_id cast~n"),
+    lists:foldl(fun
+        ({CallId1, _}, Acc) when CallId1 =:= CallId -> [{CallId, FsmPid} | Acc];
+        (_, Acc) -> Acc
+    end, [], CallIdList);
 handle_cast(Msg, St) ->
     io:format("core: unknown cast msg - ~p~n", [Msg]),
     [noreply, St].

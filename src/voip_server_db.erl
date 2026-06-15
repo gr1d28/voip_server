@@ -232,22 +232,42 @@ add_call(Call) ->
 
 -spec get_call(nksip:call_id()) -> [#call{}].
 get_call(CallId) ->
-    mnesia:dirty_read({call, CallId}).
+    case mnesia:dirty_read({call, CallId}) of
+        [] ->
+            mnesia:dirty_index_read(call, CallId, call_id_b);
+        Call ->
+            Call
+    end.
 
 -spec delete_call(nksip:call_id()) -> ok | {error, term()}.
 delete_call(CallId) ->
-    F = fun () -> mnesia:delete({call, CallId}) end,
+    F = fun() ->
+        case mnesia:read({call, CallId}) of
+            [] ->
+                case mnesia:index_read(call, CallId, call_id_b) of
+                    [] ->
+                        ok;
+                    Calls ->
+                        lists:foreach(fun(Call) ->
+                            mnesia:delete({call, Call#call.call_id_a})
+                        end, Calls)
+                end;
+            [_Call] ->
+                mnesia:delete({call, CallId})
+        end
+    end,
     case mnesia:transaction(F) of
         {atomic, ok} -> ok;
         {aborted, Reason} -> {error, Reason}
     end.
 
--spec get_all_map_CallId_FsmPid() -> [{nksip:call_id(), pid()}] | [].
+-spec get_all_map_CallId_FsmPid() -> [{nksip:call_id(), nksip:call_id(), pid()}] | [].
 get_all_map_CallId_FsmPid() ->
     %% Возвращаем все звонки, кроме завершенных
-    MatchSpec = ets:fun2ms(fun(#call{call_id = CallId, fsm_pid = FsmPid, state = State})
+    MatchSpec = ets:fun2ms(fun(#call{call_id_a = CallIdA, call_id_b = CallIdB,
+                                fsm_pid = FsmPid, state = State})
                              when State /= terminated ->
-                                  {CallId, FsmPid}
+                                  {CallIdA, CallIdB, FsmPid}
                            end),
     mnesia:dirty_select(call, MatchSpec).
 
@@ -340,7 +360,7 @@ get_table_opts(Table, AvailableNodes) ->
              {attributes, record_info(fields, registrations)}];
         call ->
             [{type, set}, {disc_copies, AvailableNodes}, {record_name, call},
-             {attributes, record_info(fields, call)}];
+             {attributes, record_info(fields, call)}, {index, [call_id_b]}];
         dialplan ->
             [{type, set}, {disc_copies, AvailableNodes}, {record_name, dialplan},
              {attributes, record_info(fields, dialplan)}]

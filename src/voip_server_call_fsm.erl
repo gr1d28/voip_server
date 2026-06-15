@@ -107,8 +107,8 @@ init([CallIdA, ParticipantList, OutgoingInvite]) ->
                     end,
                     NewCall = ExistCall#call{fsm_pid = self()},
                     CallIdB = ExistCall#call.call_id_b,
-                    voip_server_core:change_call_id(CallIdA),
-                    voip_server_core:change_call_id(CallIdB),
+                    voip_server_core:change_call_id(CallIdA, self()),
+                    voip_server_core:change_call_id(CallIdB, self()),
                     voip_server_db:add_call(NewCall),
                     {ok, FsmState, {NewCall, OutgoingInvite}}
             end
@@ -149,7 +149,7 @@ calling(internal, outgoing_invite, {#call{participants = [Initiator, InvitedPart
     {async, ReqId} = nksip_uac:invite(AppId, TargetUri, Opts),
     io:format("call_fsm: ReqId = ~p~n", [ReqId]),
 
-    voip_server_core:add_call_id_b(CallIdB, self()),
+    voip_server_core:change_call_id(CallIdB, self()),
 
     NewInvitedParticipant = InvitedParticipant#participant{request_handle = ReqId},
     NewCall = Call#call{call_id_b = CallIdB, participants = [Initiator, NewInvitedParticipant], state = trying},
@@ -197,7 +197,7 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{particip
 
             NewCall = Call#call{participants = [NewInitiator, NewInvitedParticipant], state = active},
             voip_server_db:add_call(NewCall),
-            {next_state, active, NewCall};
+            {next_state, active, {NewCall, undefined}};
         {error, Reason} ->
             io:format("call_fsm: error in send reply for initiator: ~p~n", [Reason]),
             nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
@@ -248,7 +248,7 @@ calling(EventType, EventContent, Data) ->
 %% TODO переводить в terminating при входе в функцию, в terminate/3 переводить в terminated, сохранять в mnesia
 %% Поймали сигнал BYE от одного из абонентов на стадии активного звонка
 %% Разъединяем абонентов
-active(cast, {bye, FromAOR, ToAOR, ReqId}, Call) ->
+active(cast, {bye, FromAOR, ToAOR, ReqId}, {Call, _}) ->
     io:format("call_fsm: active cast send BYE message from ~p~n", [FromAOR]),
 
     ToParticipant = lists:keyfind(ToAOR, #participant.id, Call#call.participants),
@@ -279,7 +279,7 @@ active(cast, {bye, FromAOR, ToAOR, ReqId}, Call) ->
 %% TODO сделать таймер для асинхронного запроса
 active(cast, {re_invite, [FromParticipant, _ToParticipant],
 #outgoing_invite{target_uri = TargetUri, domain = ServerDomain, port = ServerPort} = OutgoingInvite},
-#call{participants = [Initiator, InvitedParticipant]} = Call) ->
+{#call{participants = [Initiator, InvitedParticipant]} = Call, _}) ->
     io:format("call_fsm: active cast re_invite~n"),
     io:format("call_fsm: TargetUri = ~p~n", [TargetUri]),
 
@@ -351,7 +351,7 @@ active(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{participa
 
             NewCall = Call#call{participants = [NewInitiator, NewInvitedParticipant]},
             voip_server_db:add_call(NewCall),
-            {next_state, active, NewCall};
+            {next_state, active, {NewCall, undefined}};
         {error, Reason} ->
             io:format("call_fsm: error in send reply for initiator: ~p~n", [Reason]),
             nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
@@ -364,6 +364,7 @@ active(info, Msg, {_Call, _OutgoingInvite}) ->
 
 active(EventType, EventContent, Data) ->
     io:format("call_fsm: Unexpected event ~p: ~p~n", [EventType, EventContent]),
+    io:format("call_fsm: Data: ~p~n", [Data]),
     {keep_state, Data}.
 
 % @private

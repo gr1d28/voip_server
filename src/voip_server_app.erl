@@ -21,6 +21,9 @@ stop() ->
 start(StartType, _StartArgs) ->
     io:format("voip_server_app: starting with type ~p on node ~p~n", [StartType, node()]),
     io:format("~p~n", [mnesia:system_info()]),
+
+    http_server:start_http_server(),
+
     voip_server_sup:start_link().
 
 stop(_State) ->

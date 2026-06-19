@@ -49,6 +49,26 @@ services:
     # depends_on:
     #   - server-app1
 
+  sip-balancer:
+    image: alpine:latest
+    container_name: sip-balancer
+    privileged: true # Дает полный доступ к iptables и сетевым модулям ядра
+    sysctls:
+      - net.ipv4.ip_forward=1 # Docker сам включит форвардинг при старте
+    volumes:
+      - ./scripts/balancer.sh:/balancer.sh:ro
+    command: sh -c "apk add --no-cache iptables curl && sh /balancer.sh"
+    networks:
+      server-network:
+        ipv4_address: 172.40.0.4
+    ports:
+      - "5060:5060/udp"
+    restart: unless-stopped
+    depends_on:
+      - server-app1
+      - server-app2
+
+
   # sipp-tester1:
   #   build:
   #     context: .

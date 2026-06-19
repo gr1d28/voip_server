@@ -69,8 +69,6 @@ terminate(_Reason, active, Call) ->
     io:format("call_fsm: call ~p deleted~n", [CallId]),
     ok.
 
-%% TODO проверять, есть ли в базе CallId - если да, то переходить в соответствующее состояние.
-%% Для работы этой логики ещё необходимо сделать restart не temporary, а transient
 init([CallIdA, ParticipantList, OutgoingInvite]) ->
     io:format("call_fsm: call_id_a = ~p~n", [CallIdA]),
     case voip_server_db:get_call(CallIdA) of
@@ -203,6 +201,15 @@ calling(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{particip
             nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
             {stop, normal}
     end;
+%% Сработал внутренний таймер nksip
+%% Отправляем код 408 timeout по запросу
+calling(info, {nksip_uac_reply, _FromPid, {resp, 408, _Req, _C}}, {#call{participants = [Initiator, _InvitedParticipant]}, _OutgoingInvite}) ->
+    io:format("call_fsm: 408 timeout~n"),
+    case nksip_request:reply({408, []}, Initiator#participant.request_handle) of
+        ok -> ok;
+        {error, Reason} -> io:format("call_fsm: error in reply initiator: ~p~n", [Reason])
+    end,
+    {stop, normal};
 %% Вызываемый абонент занят - завершаем звонок
 %% Отправляем busy вызывающему, вызываемому nksip сам отправит ACK
 calling(info, {nksip_uac_reply, _FromPid, {resp, 486, _Req, _C}}, {#call{participants = [Initiator, _InvitedParticipant]}, _OutgoingInvite}) ->
@@ -274,6 +281,7 @@ active(cast, {bye, FromAOR, ToAOR, ReqId}, {Call, _}) ->
             io:format("call_fsm: unexpected answer from nksip_uac:bye/2 ~p: ~p", [ToAOR, Answer]),
             {stop, normal}
     end;
+
 %% Пришел Re-INVITE запрос
 %% Отправляем его второму абоненту и асинхронно обрабатываем ответ 200 OK с новый телом SDP
 %% TODO сделать таймер для асинхронного запроса
@@ -357,6 +365,17 @@ active(info, {nksip_uac_reply, _FromPid, {resp, 200, Req, _C}}, {#call{participa
             nksip_uac:cancel(InvitedParticipant#participant.request_handle, []),
             {stop, normal}
     end;
+
+
+%% Сработал внутренний таймер nksip
+%% Отправляем код 408 timeout по запросу
+active(info, {nksip_uac_reply, _FromPid, {resp, 408, _Req, _C}}, {#call{participants = [Initiator, _InvitedParticipant]}, _OutgoingInvite}) ->
+    io:format("call_fsm: 408 timeout~n"),
+    case nksip_request:reply({408, []}, Initiator#participant.request_handle) of
+        ok -> ok;
+        {error, Reason} -> io:format("call_fsm: error in reply initiator: ~p~n", [Reason])
+    end,
+    {stop, normal};
 
 active(info, Msg, {_Call, _OutgoingInvite}) ->
     io:format("call_fsm: active info msg = ~p~n", [Msg]),

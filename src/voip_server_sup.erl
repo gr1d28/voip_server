@@ -39,18 +39,8 @@ init([]) ->
         },
         nksip:get_sup_spec(voip_server_uas, #{
             plugins => [nksip_registrar],
-             %% Слушаем на всех интерфейсах
-            sip_listen => "sip:0.0.0.0:5060",
-
-            %% Включаем поддержку NAT
-            sip_nat => true,
-            force_rport => true,
-            auto_contact => true,
-
-            outbound_proxy => false,
-            register => false,
-            role => server_only,
-            callback => voip_server_uas
+            sip_local_host => "localhost",
+            sip_listen => "sip:all:5060"
         })
     ],
     io:format("voip_server_sup: SupFlags: ~p~nChildSpec: ~p~n", [SupFlags, ChildSpecs]),

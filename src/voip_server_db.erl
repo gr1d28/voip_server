@@ -29,7 +29,6 @@ start_master() ->
             mnesia:start(),
             io:format("Start mnesia on master ~p~n", [node()])
     end,
-    io:format("Mnesia system info: ~p~n", [mnesia:system_info()]),
     %% Проверка доступности резервных узлов
     AvailableNodes = [Node ||  Node <- ?NODE_LIST, net_adm:ping(Node) =:= pong],
     io:format("Available nodes: ~p~n", [AvailableNodes]),
@@ -58,7 +57,6 @@ start_slave() ->
             mnesia:start(),
             io:format("Start mnesia on slave ~p~n", [node()])
     end,
-    io:format("Mnesia system info: ~p~n", [mnesia:system_info()]),
     %% Проверка локальной schema на наличе таблиц в базе
     ExistTables = mnesia:system_info(tables),
     NotExistTables = ?TABLES_NAME_LIST -- ExistTables,
@@ -280,14 +278,14 @@ count_all_call() ->
 %%%===================================================================
 
 init_table_users() ->
-    Hash1 = nksip_auth:make_ha1(<<"100">>, <<"1234">>, <<"172.40.0.2">>),
-    Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.2">>),
-    Hash3 = nksip_auth:make_ha1(<<"102">>, <<"1234">>, <<"172.40.0.2">>),
-    Hash4 = nksip_auth:make_ha1(<<"103">>, <<"1234">>, <<"172.40.0.2">>),
-    add_user(<<"100">>, <<"172.40.0.2">>, Hash1, active, <<"DisplayName">>),
-    add_user(<<"101">>, <<"172.40.0.2">>, Hash2, active, <<"DisplayName">>),
-    add_user(<<"102">>, <<"172.40.0.2">>, Hash3, active, <<"DisplayName">>),
-    add_user(<<"103">>, <<"172.40.0.2">>, Hash4, active, <<"DisplayName">>).
+    Hash1 = nksip_auth:make_ha1(<<"100">>, <<"1234">>, <<"172.40.0.4">>),
+    Hash2 = nksip_auth:make_ha1(<<"101">>, <<"1234">>, <<"172.40.0.4">>),
+    Hash3 = nksip_auth:make_ha1(<<"102">>, <<"1234">>, <<"172.40.0.4">>),
+    Hash4 = nksip_auth:make_ha1(<<"103">>, <<"1234">>, <<"172.40.0.4">>),
+    add_user(<<"100">>, <<"172.40.0.4">>, Hash1, active, <<"DisplayName">>),
+    add_user(<<"101">>, <<"172.40.0.4">>, Hash2, active, <<"DisplayName">>),
+    add_user(<<"102">>, <<"172.40.0.4">>, Hash3, active, <<"DisplayName">>),
+    add_user(<<"103">>, <<"172.40.0.4">>, Hash4, active, <<"DisplayName">>).
 
 %% Запускается на master при первой загрузке системы
 sync_cluster_nodes(NodeList) ->

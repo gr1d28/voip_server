@@ -57,7 +57,7 @@ services:
       - net.ipv4.ip_forward=1 # Docker сам включит форвардинг при старте
     volumes:
       - ./scripts/balancer.sh:/balancer.sh:ro
-    command: sh -c "apk add --no-cache iptables curl && sh /balancer.sh"
+    command: sh -c "apk add --no-cache iptables curl conntrack-tools && sh /balancer.sh"
     networks:
       server-network:
         ipv4_address: 172.40.0.4
